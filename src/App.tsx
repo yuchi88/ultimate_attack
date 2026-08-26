@@ -60,14 +60,22 @@ function App() {
   // カメラの起動
   // =========================
   useEffect(() => {
+    let stream: MediaStream | null = null;
+    let isCancelled = false;
+
     const startCamera = async () => {
       console.log("カメラの起動開始");
 
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
+        stream = await navigator.mediaDevices.getUserMedia({
           video: true,
           audio: false,
         });
+
+        if (isCancelled) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
 
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
@@ -89,16 +97,20 @@ function App() {
 
     // カメラ停止
     return () => {
-      if (videoRef.current?.srcObject) {
-        const stream = videoRef.current.srcObject as MediaStream;
+      isCancelled = true;
 
-        stream.getTracks().forEach((track) => {
-          track.stop();
-        });
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+      }
+
+      if (videoRef.current) {
+        videoRef.current.onloadeddata = null;
+        videoRef.current.srcObject = null;
       }
 
       if (animationFrameRef.current !== null) {
         cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
       }
     };
   }, []);
