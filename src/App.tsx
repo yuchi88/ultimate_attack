@@ -5,6 +5,14 @@ import {
   type PoseLandmarkerResult,
 } from "@mediapipe/tasks-vision";
 
+import Home from "./pages/Home";
+
+function App() {
+  return <Home />;
+}
+
+export default App;
+
 function App() {
   // カメラ映像
   const videoRef = useRef<HTMLVideoElement>(null);
