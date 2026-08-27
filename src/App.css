@@ -136,7 +136,7 @@ button {
   display: grid;
 
   grid-template-columns:
-    1fr 1fr 1fr;
+    repeat(4, 1fr);
 
   gap: 15px;
 }
@@ -167,6 +167,80 @@ button {
   margin-top: 10px;
 
   font-size: 24px;
+}
+
+.player-marker {
+  position: absolute;
+  z-index: 8;
+  transform: translate(-50%, -110%);
+  min-width: 74px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  gap: 4px;
+  pointer-events: none;
+}
+
+.player-marker::before {
+  content: "";
+  position: absolute;
+  inset: -28px -18px;
+  border: 3px solid currentColor;
+  border-radius: 999px;
+  opacity: 0.55;
+  box-shadow: 0 0 22px currentColor;
+}
+
+.player-marker span {
+  position: relative;
+  padding: 9px 15px;
+  border: 2px solid currentColor;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.78);
+  color: white;
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: 2px;
+  text-shadow: 0 0 8px black;
+}
+
+.player-marker small {
+  position: relative;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.72);
+  color: white;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  text-shadow: 0 0 6px black;
+}
+
+.player-marker.player1 {
+  color: #53d4ff;
+}
+
+.player-marker.player2 {
+  color: #ff6b6b;
+}
+
+.player-marker.attacking span {
+  background: rgba(80, 20, 120, 0.85);
+  box-shadow: 0 0 24px rgba(204, 92, 255, 0.95);
+}
+
+.player-marker.damaged::before {
+  border-color: #ff2b2b;
+  background: rgba(255, 0, 0, 0.2);
+  box-shadow:
+    0 0 28px rgba(255, 40, 40, 0.95),
+    inset 0 0 34px rgba(255, 20, 20, 0.75);
+  opacity: 1;
+}
+
+.player-marker.damaged span {
+  background: rgba(180, 0, 0, 0.88);
+  border-color: #ff2b2b;
 }
 
 .instruction {
@@ -218,7 +292,7 @@ button {
   color: white;
 }
 
-.cpu-panel {
+.player2-panel {
   border-color: rgba(255, 120, 80, 0.8);
 }
 

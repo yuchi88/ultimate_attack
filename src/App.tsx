@@ -21,6 +21,8 @@ type Vector2 = {
   y: number;
 };
 
+type PlayerId = "player1" | "player2";
+
 type Fireball = {
   x: number;
   y: number;
@@ -29,6 +31,8 @@ type Fireball = {
   radius: number;
   life: number;
   maxLife: number;
+  owner: PlayerId | null;
+  attackId: number | null;
 };
 
 type HitEffect = {
@@ -39,6 +43,7 @@ type HitEffect = {
   radius: number;
   color: string;
   damage: number;
+  target: PlayerId;
 };
 
 type PunchHandState = {
@@ -54,12 +59,57 @@ type PunchHandState = {
 const FINGER_TIPS = [4, 8, 12, 16, 20];
 const OPEN_HAND_TIPS = [8, 12, 16, 20];
 const MAX_PUNCH_CHARGE = 1800;
-const MIN_PUNCH_CHARGE = 300;
+const MIN_PUNCH_CHARGE = 120;
 const MIN_FIST_DISTANCE = 0.14;
-const MIN_PUNCH_MOVE_SCALE = 0.32;
-const MIN_PUNCH_MOVE_DISTANCE = 0.025;
-const MIN_PUNCH_STRAIGHTNESS = 0.82;
-const PUNCH_COOLDOWN = 900;
+const MIN_PUNCH_MOVE_SCALE = 0.18;
+const MIN_PUNCH_MOVE_DISTANCE = 0.012;
+const MIN_PUNCH_STRAIGHTNESS = 0.58;
+const PUNCH_COOLDOWN = 520;
+const BEAM_DAMAGE_COOLDOWN = 500;
+const SHOCKWAVE_DAMAGE_COOLDOWN = 650;
+const DAMAGE_FLASH_TIME = 650;
+const BEAM_TARGET_RADIUS_MIN = 0.075;
+const BEAM_TARGET_RADIUS_SCALE = 0.52;
+const FIREBALL_DAMAGE = 12;
+const SHOCKWAVE_DAMAGE = 7;
+const SHOCKWAVE_HIT_RADIUS = 0.16;
+
+type BattleWinner = "PLAYER 1" | "PLAYER 2";
+
+type FaceAttackState = ReturnType<
+  typeof getFaceAttackState
+>;
+
+type BattlePlayer = {
+  id: PlayerId;
+  face: Point[];
+  center: Point;
+  radius: number;
+  attack: FaceAttackState;
+};
+
+type PlayerMarker = {
+  id: PlayerId;
+  x: number;
+  y: number;
+  damaged: boolean;
+  attacking: boolean;
+  handCount: number;
+};
+
+type HandAssignment = {
+  player: BattlePlayer;
+  hands: Point[][];
+};
+
+type AttackRecord = {
+  id: number;
+  type: "beam" | "fireball" | "shockwave";
+  owner: PlayerId;
+  target: PlayerId | null;
+  startedAt: number;
+  lastHitAt: number | null;
+};
 
 const POSE_CONNECTIONS = [
   [11, 12],
@@ -544,7 +594,8 @@ function drawMouthBeam(
   ctx: CanvasRenderingContext2D,
   canvas: HTMLCanvasElement,
   face: Point[],
-  time: number
+  time: number,
+  target?: Point
 ) {
   const upperLip = face[13];
   const lowerLip = face[14];
@@ -575,10 +626,15 @@ function drawMouthBeam(
     );
 
   const direction =
-    getNormalizedDirection(
-      faceCenter,
-      noseTip
-    );
+    target
+      ? getNormalizedDirection(
+          mouthCenter,
+          target
+        )
+      : getNormalizedDirection(
+          faceCenter,
+          noseTip
+        );
 
   const startX =
     mouthCenter.x *
@@ -1317,7 +1373,10 @@ function drawHitEffects(
   });
 }
 
-function getMouthBeamInfo(face: Point[]) {
+function getMouthBeamInfo(
+  face: Point[],
+  target?: Point
+) {
   const upperLip = face[13];
   const lowerLip = face[14];
   const noseTip = face[1];
@@ -1342,10 +1401,16 @@ function getMouthBeamInfo(face: Point[]) {
     leftCheek,
     rightCheek
   );
-  const direction = getNormalizedDirection(
-    faceCenter,
-    noseTip
-  );
+  const direction =
+    target
+      ? getNormalizedDirection(
+          mouthCenter,
+          target
+        )
+      : getNormalizedDirection(
+          faceCenter,
+          noseTip
+        );
 
   return {
     start: {
@@ -1414,16 +1479,69 @@ function isBeamCollidingWithTarget(
   return distance <= targetRadius;
 }
 
+function isCircleCollidingWithTarget(
+  circleCenter: Point,
+  circleRadius: number,
+  targetCenter: Point,
+  targetRadius: number
+) {
+  return distance(
+    circleCenter,
+    targetCenter
+  ) <= circleRadius + targetRadius;
+}
+
+function getShockwaveEnd(
+  center: Point,
+  direction: Vector2,
+  strength: number
+): Point {
+  const length =
+    0.75 + strength * 0.45;
+
+  return {
+    x: center.x + direction.x * length,
+    y: center.y + direction.y * length,
+    z: 0,
+  };
+}
+
+function isShockwaveCollidingWithTarget(
+  center: Point,
+  direction: Vector2,
+  strength: number,
+  targetCenter: Point,
+  targetRadius: number
+) {
+  const end =
+    getShockwaveEnd(
+      center,
+      direction,
+      strength
+    );
+
+  const waveRadius =
+    SHOCKWAVE_HIT_RADIUS *
+    (0.75 + strength * 0.35);
+
+  return isBeamCollidingWithTarget(
+    center,
+    end,
+    targetCenter,
+    targetRadius + waveRadius
+  );
+}
+
 function getTimerWinner(
-  playerHp: number,
-  cpuHp: number
-): "PLAYER" | "CPU" | null {
-  if (playerHp <= 0 && cpuHp > 0) {
-    return "CPU";
+  player1Hp: number,
+  player2Hp: number
+): BattleWinner | null {
+  if (player1Hp <= 0 && player2Hp > 0) {
+    return "PLAYER 2";
   }
 
-  if (cpuHp <= 0 && playerHp > 0) {
-    return "PLAYER";
+  if (player2Hp <= 0 && player1Hp > 0) {
+    return "PLAYER 1";
   }
 
   return null;
@@ -1507,6 +1625,215 @@ function getFaceAttackState(face: Point[]) {
   };
 }
 
+function getFaceTarget(face: Point[]) {
+  const noseTip = face[1];
+  const leftCheek = face[234];
+  const rightCheek = face[454];
+  const upperLip = face[13];
+  const lowerLip = face[14];
+
+  if (
+    !noseTip ||
+    !leftCheek ||
+    !rightCheek ||
+    !upperLip ||
+    !lowerLip
+  ) {
+    return null;
+  }
+
+  const cheekCenter =
+    getMidPoint(
+      leftCheek,
+      rightCheek
+    );
+
+  const mouthCenter =
+    getMidPoint(
+      upperLip,
+      lowerLip
+    );
+
+  const center = {
+    x:
+      (noseTip.x +
+        cheekCenter.x +
+        mouthCenter.x) /
+      3,
+    y:
+      (noseTip.y +
+        cheekCenter.y +
+        mouthCenter.y) /
+      3,
+    z: 0,
+  };
+
+  const faceWidth =
+    distance(
+      leftCheek,
+      rightCheek
+    );
+
+  return {
+    center,
+    radius:
+      Math.max(
+        BEAM_TARGET_RADIUS_MIN,
+        faceWidth *
+          BEAM_TARGET_RADIUS_SCALE
+      ),
+  };
+}
+
+function getBattlePlayers(
+  faces: Point[][],
+  attacks: FaceAttackState[]
+): BattlePlayer[] {
+  return faces
+    .map((face, index) => {
+      const target =
+        getFaceTarget(face);
+
+      if (!target) {
+        return null;
+      }
+
+      return {
+        id:
+          index === 0
+            ? "player1"
+            : "player2",
+        face,
+        center: target.center,
+        radius: target.radius,
+        attack: attacks[index],
+      };
+    })
+    .filter(
+      (player): player is BattlePlayer =>
+        player !== null
+    )
+    .sort(
+      (a, b) =>
+        b.center.x - a.center.x
+    )
+    .slice(0, 2)
+    .map((player, index) => ({
+      ...player,
+      id:
+        index === 0
+          ? "player1"
+          : "player2",
+    }));
+}
+
+function getOpponent(
+  player: BattlePlayer,
+  players: BattlePlayer[]
+) {
+  return players.find(
+    (candidate) =>
+      candidate.id !== player.id
+  );
+}
+
+function getPlayerLabel(id: PlayerId) {
+  return id === "player1"
+    ? "P1"
+    : "P2";
+}
+
+function getPlayerColor(id: PlayerId) {
+  return id === "player1"
+    ? "#53d4ff"
+    : "#ff6b6b";
+}
+
+function getHandAnchor(hand: Point[]) {
+  return getPalmCenter(hand) ??
+    getFistCenter(hand);
+}
+
+function assignHandsToPlayers(
+  hands: Point[][],
+  players: BattlePlayer[]
+): HandAssignment[] {
+  const assignments =
+    players.map((player) => ({
+      player,
+      hands: [] as Point[][],
+    }));
+
+  const candidates =
+    hands
+      .map((hand, handIndex) => {
+        const anchor =
+          getHandAnchor(hand);
+
+        if (!anchor) {
+          return [];
+        }
+
+        return players.map((player) => ({
+          hand,
+          handIndex,
+          playerId: player.id,
+          distance:
+            distance(anchor, player.center),
+        }));
+      })
+      .flat()
+      .sort(
+        (a, b) =>
+          a.distance - b.distance
+      );
+
+  const usedHands =
+    new Set<number>();
+
+  candidates.forEach((candidate) => {
+    if (usedHands.has(candidate.handIndex)) {
+      return;
+    }
+
+    const assignment =
+      assignments.find(
+        (item) =>
+          item.player.id ===
+          candidate.playerId
+      );
+
+    if (
+      !assignment ||
+      assignment.hands.length >= 2
+    ) {
+      return;
+    }
+
+    assignment.hands.push(
+      candidate.hand
+    );
+    usedHands.add(candidate.handIndex);
+  });
+
+  return assignments;
+}
+
+function getBattleBeamTarget(
+  attacker: BattlePlayer,
+  defender: BattlePlayer
+): Point {
+  return {
+    x:
+      defender.center.x >
+      attacker.center.x
+        ? 1.18
+        : -0.18,
+    y: attacker.center.y,
+    z: 0,
+  };
+}
+
 function App() {
   const videoRef =
     useRef<HTMLVideoElement>(null);
@@ -1541,20 +1868,41 @@ function App() {
   const hitEffectsRef =
     useRef<HitEffect[]>([]);
 
-  const cpuBeamUntilRef =
-    useRef(0);
+  const attackRecordsRef =
+    useRef<AttackRecord[]>([]);
+
+  const nextAttackIdRef =
+    useRef(1);
 
   const battleStartedRef =
     useRef(false);
 
+  const lastBeamDamageRef =
+    useRef<Record<PlayerId, number>>({
+      player1: 0,
+      player2: 0,
+    });
+
+  const lastShockwaveDamageRef =
+    useRef<Record<PlayerId, number>>({
+      player1: 0,
+      player2: 0,
+    });
+
+  const damageFlashUntilRef =
+    useRef<Record<PlayerId, number>>({
+      player1: 0,
+      player2: 0,
+    });
+
   const [playerHP, setPlayerHP] =
     useState(100);
 
-  const [cpuHP, setCpuHP] =
+  const [player2HP, setPlayer2HP] =
     useState(100);
 
   const [battleWinner, setBattleWinner] =
-    useState<"PLAYER" | "CPU" | null>(null);
+    useState<BattleWinner | null>(null);
 
   const [cameraStarted, setCameraStarted] =
     useState(false);
@@ -1570,6 +1918,9 @@ function App() {
 
   const [faceCount, setFaceCount] =
     useState(0);
+
+  const [playerMarkers, setPlayerMarkers] =
+    useState<PlayerMarker[]>([]);
 
   const [mouthOpen, setMouthOpen] =
     useState(false);
@@ -1592,36 +1943,27 @@ function App() {
   const [showSettings, setShowSettings] =
     useState(false);
 
-  const [cpuEnabled, setCpuEnabled] =
-    useState(true);
-
   const [maxPlayers, setMaxPlayers] =
-    useState(4);
+    useState(2);
 
   const [maxHands, setMaxHands] =
-    useState(2);
+    useState(4);
 
   const [status, setStatus] =
     useState("カメラを起動してください");
 
   const applySettings = (
-    nextCpuEnabled: boolean,
     nextMaxPlayers: number,
     nextMaxHands: number
   ) => {
     const safeMaxPlayers =
-      Math.min(4, Math.max(1, nextMaxPlayers));
+      Math.min(4, Math.max(2, nextMaxPlayers));
     const safeMaxHands =
-      Math.min(8, Math.max(1, nextMaxHands));
+      Math.min(8, Math.max(4, nextMaxHands));
 
-    setCpuEnabled(nextCpuEnabled);
     setMaxPlayers(safeMaxPlayers);
     setMaxHands(safeMaxHands);
 
-    localStorage.setItem(
-      "ultimate_cpu_enabled",
-      String(nextCpuEnabled)
-    );
     localStorage.setItem(
       "ultimate_max_players",
       String(safeMaxPlayers)
@@ -1641,19 +1983,29 @@ function App() {
 
   const resetBattleState = () => {
     setPlayerHP(100);
-    setCpuHP(100);
+    setPlayer2HP(100);
     setBattleWinner(null);
     battleStartedRef.current = false;
-    cpuBeamUntilRef.current = 0;
+    lastBeamDamageRef.current = {
+      player1: 0,
+      player2: 0,
+    };
+    lastShockwaveDamageRef.current = {
+      player1: 0,
+      player2: 0,
+    };
+    damageFlashUntilRef.current = {
+      player1: 0,
+      player2: 0,
+    };
+    attackRecordsRef.current = [];
+    nextAttackIdRef.current = 1;
     fireballsRef.current = [];
     hitEffectsRef.current = [];
+    setPlayerMarkers([]);
   };
 
   useEffect(() => {
-    const storedCpu =
-      localStorage.getItem(
-        "ultimate_cpu_enabled"
-      );
     const storedPlayers =
       localStorage.getItem(
         "ultimate_max_players"
@@ -1663,26 +2015,21 @@ function App() {
         "ultimate_max_hands"
       );
 
-    setCpuEnabled(
-      storedCpu === null
-        ? true
-        : storedCpu === "true"
-    );
     setMaxPlayers(
       storedPlayers
         ? Math.min(
             4,
-            Math.max(1, Number(storedPlayers))
+            Math.max(2, Number(storedPlayers))
           )
-        : 4
+        : 2
     );
     setMaxHands(
       storedHands
         ? Math.min(
             8,
-            Math.max(1, Number(storedHands))
+            Math.max(4, Number(storedHands))
           )
-        : 2
+        : 4
     );
   }, []);
 
@@ -1906,7 +2253,8 @@ function App() {
     x: number,
     y: number,
     color: string,
-    damage: number
+    damage: number,
+    target: PlayerId
   ) => {
     hitEffectsRef.current = [
       ...hitEffectsRef.current,
@@ -1918,12 +2266,66 @@ function App() {
         radius: 0.08,
         color,
         damage,
+        target,
       },
     ].slice(-12);
   };
 
+  const recordAttack = (
+    type: AttackRecord["type"],
+    owner: PlayerId,
+    target: PlayerId | null,
+    time: number
+  ) => {
+    const recent =
+      attackRecordsRef.current.findLast(
+        (attack) =>
+          attack.type === type &&
+          attack.owner === owner &&
+          attack.target === target &&
+          time - attack.startedAt < 700
+      );
+
+    if (recent) {
+      return recent;
+    }
+
+    const attack = {
+      id: nextAttackIdRef.current,
+      type,
+      owner,
+      target,
+      startedAt: time,
+      lastHitAt: null,
+    };
+
+    nextAttackIdRef.current += 1;
+    attackRecordsRef.current = [
+      ...attackRecordsRef.current,
+      attack,
+    ].slice(-50);
+
+    return attack;
+  };
+
+  const markAttackHit = (
+    attackId: number,
+    time: number
+  ) => {
+    attackRecordsRef.current =
+      attackRecordsRef.current.map(
+        (attack) =>
+          attack.id === attackId
+            ? {
+                ...attack,
+                lastHitAt: time,
+              }
+            : attack
+      );
+  };
+
   const applyBattleDamage = (
-    target: "cpu" | "player",
+    target: PlayerId,
     amount: number,
     hitX?: number,
     hitY?: number,
@@ -1935,12 +2337,8 @@ function App() {
 
     battleStartedRef.current = true;
 
-    if (target === "cpu" && !cpuEnabled) {
-      return;
-    }
-
-    if (target === "cpu") {
-      setCpuHP((current) => {
+    if (target === "player2") {
+      setPlayer2HP((current) => {
         const next = Math.max(0, current - amount);
 
         if (hitX !== undefined && hitY !== undefined) {
@@ -1948,9 +2346,14 @@ function App() {
             hitX,
             hitY,
             hitColor ?? "#ff6b6b",
-            amount
+            amount,
+            target
           );
         }
+
+        damageFlashUntilRef.current[target] =
+          performance.now() +
+          DAMAGE_FLASH_TIME;
 
         const winner = getTimerWinner(
           playerHP,
@@ -1974,13 +2377,18 @@ function App() {
           hitX,
           hitY,
           hitColor ?? "#53d4ff",
-          amount
+          amount,
+          target
         );
       }
 
+      damageFlashUntilRef.current[target] =
+        performance.now() +
+        DAMAGE_FLASH_TIME;
+
       const winner = getTimerWinner(
         next,
-        cpuHP
+        player2HP
       );
 
       if (winner) {
@@ -1992,11 +2400,21 @@ function App() {
   };
 
   const updatePunchFireballs = (
-    hands: Point[][],
-    time: number
+    time: number,
+    handAssignments: HandAssignment[],
+    battlePlayers: BattlePlayer[]
   ) => {
     const punchStates =
       punchStatesRef.current;
+
+    let trackedHandEntries =
+      handAssignments.flatMap(
+        (assignment) =>
+          assignment.hands.map((hand) => ({
+            hand,
+            owner: assignment.player.id,
+          }))
+      );
 
     const previousFrameTime =
       punchStates.reduce(
@@ -2018,7 +2436,9 @@ function App() {
       : 16;
 
     let trackedHands =
-      hands.slice(0, 2);
+      trackedHandEntries.map(
+        (entry) => entry.hand
+      );
 
     if (
       trackedHands.length === 2 &&
@@ -2069,10 +2489,14 @@ function App() {
           swappedOrderDistance <
           sameOrderDistance
         ) {
-          trackedHands = [
-            trackedHands[1],
-            trackedHands[0],
+          trackedHandEntries = [
+            trackedHandEntries[1],
+            trackedHandEntries[0],
           ];
+          trackedHands =
+            trackedHandEntries.map(
+              (entry) => entry.hand
+            );
         }
       }
     }
@@ -2112,9 +2536,77 @@ function App() {
             fireball.y < 1.35
         );
 
+    const hitFireballs =
+      new Set<number>();
+
+    fireballsRef.current.forEach(
+      (fireball, fireballIndex) => {
+        if (!fireball.owner) {
+          return;
+        }
+
+        const defender =
+          battlePlayers.find(
+            (player) =>
+              player.id !== fireball.owner
+          );
+
+        if (!defender) {
+          return;
+        }
+
+        const hit =
+          isCircleCollidingWithTarget(
+            {
+              x: fireball.x,
+              y: fireball.y,
+              z: 0,
+            },
+            fireball.radius,
+            defender.center,
+            defender.radius
+          );
+
+        if (!hit) {
+          return;
+        }
+
+        hitFireballs.add(
+          fireballIndex
+        );
+
+        if (fireball.attackId) {
+          markAttackHit(
+            fireball.attackId,
+            time
+          );
+        }
+
+        applyBattleDamage(
+          defender.id,
+          FIREBALL_DAMAGE,
+          defender.center.x,
+          defender.center.y,
+          getPlayerColor(defender.id)
+        );
+      }
+    );
+
+    if (hitFireballs.size > 0) {
+      fireballsRef.current =
+        fireballsRef.current.filter(
+          (_, index) =>
+            !hitFireballs.has(index)
+        );
+    }
+
     trackedHands
       .forEach(
         (hand, handIndex) => {
+          const owner =
+            trackedHandEntries[handIndex]?.owner ??
+            null;
+
           const center =
             getFistCenter(hand);
 
@@ -2267,8 +2759,8 @@ function App() {
           state.ready = true;
 
           if (
-            (speed > 0.0012 ||
-              growthSpeed > 0.00035) &&
+            (speed > 0.00065 ||
+              growthSpeed > 0.00018) &&
             movementDistance >
               minPunchMoveDistance &&
             trajectoryStraightness >
@@ -2293,12 +2785,22 @@ function App() {
 
             const fireballSpeed =
               Math.min(
-                0.0048,
+                0.0024,
                 Math.max(
-                  0.0018,
-                  speed
+                  0.0009,
+                  speed * 0.55
                 )
               );
+
+            const attack =
+              owner
+                ? recordAttack(
+                "fireball",
+                    owner,
+                null,
+                time
+                  )
+                : null;
 
             fireballsRef.current = [
               ...fireballsRef.current,
@@ -2316,6 +2818,8 @@ function App() {
                   chargeRatio * 0.075,
                 life: 1700,
                 maxLife: 1700,
+                owner,
+                attackId: attack?.id ?? null,
               },
             ].slice(-8);
 
@@ -2412,27 +2916,62 @@ function App() {
         faceResult.faceLandmarks.length
       );
 
-      updatePunchFireballs(
-        handResult.landmarks,
-        now
-      );
-
       const faceAttackStates =
         faceResult.faceLandmarks.map(
           getFaceAttackState
         );
 
-      const activeFaceIndex =
-        faceAttackStates.findIndex(
-          (state) => state.beamActive
+      const battlePlayers =
+        getBattlePlayers(
+          faceResult.faceLandmarks,
+          faceAttackStates
+        );
+
+      const handAssignments =
+        assignHandsToPlayers(
+          handResult.landmarks,
+          battlePlayers
+        );
+
+      updatePunchFireballs(
+        now,
+        handAssignments,
+        battlePlayers
+      );
+
+      const activePlayer =
+        battlePlayers.find(
+          (player) =>
+            player.attack.beamActive
         );
 
       const displayFaceState =
-        activeFaceIndex >= 0
-          ? faceAttackStates[
-              activeFaceIndex
-            ]
-          : faceAttackStates[0];
+        activePlayer?.attack ??
+        faceAttackStates[0];
+
+      setPlayerMarkers(
+        battlePlayers.map((player) => ({
+          handCount:
+            handAssignments.find(
+              (assignment) =>
+                assignment.player.id ===
+                player.id
+            )?.hands.length ?? 0,
+          id: player.id,
+          x: 1 - player.center.x,
+          y: Math.max(
+            0.08,
+            player.center.y - player.radius
+          ),
+          damaged:
+            now <
+            damageFlashUntilRef.current[
+              player.id
+            ],
+          attacking:
+            player.attack.beamActive,
+        }))
+      );
 
       setMouthRatio(
         displayFaceState?.mouthRatio ?? 0
@@ -2453,9 +2992,6 @@ function App() {
         displayFaceState?.rightEyeOpen ?? false
       );
 
-      const playerBeamActive =
-        activeFaceIndex >= 0;
-
       hitEffectsRef.current =
         hitEffectsRef.current
           .map((effect) => ({
@@ -2464,104 +3000,148 @@ function App() {
           }))
           .filter((effect) => effect.life > 0);
 
-      if (playerBeamActive) {
-        const beamInfo =
-          getMouthBeamInfo(
-            faceResult.faceLandmarks[
-              activeFaceIndex
-            ]
-          );
+      handAssignments.forEach(
+        (assignment) => {
+          const shockwave =
+            getHandShockwaveData(
+              assignment.hands
+            );
 
-        if (beamInfo) {
-          const cpuTarget = {
-            x: 0.82,
-            y: 0.5,
-            z: 0,
-          };
+          if (!shockwave) {
+            return;
+          }
 
-          const cpuHit = isBeamCollidingWithTarget(
-            beamInfo.start,
-            beamInfo.end,
-            cpuTarget,
-            0.12
-          );
+          const defender =
+            getOpponent(
+              assignment.player,
+              battlePlayers
+            );
 
-          if (cpuHit) {
+          if (!defender) {
+            return;
+          }
+
+          const attack =
+            recordAttack(
+              "shockwave",
+              assignment.player.id,
+              defender.id,
+              now
+            );
+
+          const hit =
+            isShockwaveCollidingWithTarget(
+              shockwave.center,
+              shockwave.direction,
+              shockwave.strength,
+              defender.center,
+              defender.radius
+            );
+
+          if (
+            hit &&
+            now -
+              lastShockwaveDamageRef.current[
+                defender.id
+              ] >=
+              SHOCKWAVE_DAMAGE_COOLDOWN
+          ) {
+            lastShockwaveDamageRef.current[
+              defender.id
+            ] = now;
+            markAttackHit(
+              attack.id,
+              now
+            );
+
             applyBattleDamage(
-              "cpu",
-              9,
-              0.82,
-              0.5,
-              "#ff6b6b"
+              defender.id,
+              SHOCKWAVE_DAMAGE,
+              defender.center.x,
+              defender.center.y,
+              getPlayerColor(defender.id)
             );
           }
         }
-      }
+      );
 
-      const face =
-        faceResult.faceLandmarks[
-          activeFaceIndex >= 0
-            ? activeFaceIndex
-            : 0
-        ];
+      battlePlayers.forEach(
+        (attacker) => {
+          if (!attacker.attack.beamActive) {
+            return;
+          }
 
-      const cpuBeamActive =
-        cpuEnabled &&
-        battleStartedRef.current &&
-        now < cpuBeamUntilRef.current;
+          const defender =
+            getOpponent(
+              attacker,
+              battlePlayers
+            );
 
-      if (!cpuEnabled) {
-        cpuBeamUntilRef.current = now + 2000;
-      } else if (!battleStartedRef.current) {
-        cpuBeamUntilRef.current =
-          now + 2000;
-      } else if (!cpuBeamActive) {
-        cpuBeamUntilRef.current =
-          now + 1600;
-      }
+          if (!defender) {
+            return;
+          }
 
-      if (cpuBeamActive && face) {
-        const cpuBeamStart = {
-          x: 0.8,
-          y: 0.45,
-          z: 0,
-        };
-        const cpuBeamEnd = {
-          x: 0.18,
-          y: 0.38,
-          z: 0,
-        };
-        const playerTarget = {
-          x: 0.2,
-          y: 0.45,
-          z: 0,
-        };
+          const attack =
+            recordAttack(
+              "beam",
+              attacker.id,
+              defender.id,
+              now
+            );
 
-        const playerHit = isBeamCollidingWithTarget(
-          cpuBeamStart,
-          cpuBeamEnd,
-          playerTarget,
-          0.13
-        );
+          const beamInfo =
+            getMouthBeamInfo(
+              attacker.face,
+              getBattleBeamTarget(
+                attacker,
+                defender
+              )
+            );
 
-        if (playerHit) {
-          applyBattleDamage(
-            "player",
-            7,
-            0.2,
-            0.45,
-            "#53d4ff"
-          );
+          if (beamInfo) {
+            const hit =
+              isBeamCollidingWithTarget(
+                beamInfo.start,
+                beamInfo.end,
+                defender.center,
+                defender.radius
+              );
+
+            if (
+              hit &&
+              now -
+                lastBeamDamageRef.current[
+                  defender.id
+                ] >=
+                BEAM_DAMAGE_COOLDOWN
+            ) {
+              lastBeamDamageRef.current[
+                defender.id
+              ] = now;
+              markAttackHit(
+                attack.id,
+                now
+              );
+
+              applyBattleDamage(
+                defender.id,
+                8,
+                defender.center.x,
+                defender.center.y,
+                getPlayerColor(defender.id)
+              );
+            }
+          }
         }
-      }
+      );
 
       draw(
         handResult.landmarks,
         poseResult.landmarks,
         faceResult.faceLandmarks,
-        faceAttackStates.map(
-          (state) => state.beamActive
-        ),
+        faceAttackStates,
+        handAssignments,
+        battlePlayers,
         fireballsRef.current,
         now
       );
@@ -2581,7 +3161,9 @@ function App() {
     hands: Point[][],
     poses: Point[][],
     faces: Point[][],
-    activeFaceBeams: boolean[],
+    faceAttackStates: FaceAttackState[],
+    handAssignments: HandAssignment[],
+    battlePlayers: BattlePlayer[],
     fireballs: Fireball[],
     time: number
   ) => {
@@ -2707,11 +3289,14 @@ function App() {
     // 手・指
     // ----------------------------
 
-    drawHandShockwave(
-      ctx,
-      canvas,
-      hands,
-      time
+    handAssignments.forEach(
+      (assignment) =>
+        drawHandShockwave(
+          ctx,
+          canvas,
+          assignment.hands,
+          time
+        )
     );
 
     drawFireballs(
@@ -2837,12 +3422,36 @@ function App() {
 
     faces.forEach(
       (face, faceIndex) => {
-        if (activeFaceBeams[faceIndex]) {
+        const battlePlayer =
+          battlePlayers.find(
+            (player) =>
+              player.face === face
+          );
+
+        const opponent =
+          battlePlayer
+            ? getOpponent(
+                battlePlayer,
+                battlePlayers
+              )
+            : undefined;
+
+        const attackState =
+          battlePlayer?.attack ??
+          faceAttackStates[faceIndex];
+
+        if (attackState?.beamActive) {
           drawMouthBeam(
             ctx,
             canvas,
             face,
-            time
+            time,
+            battlePlayer && opponent
+              ? getBattleBeamTarget(
+                  battlePlayer,
+                  opponent
+                )
+              : undefined
           );
         }
 
@@ -2927,29 +3536,6 @@ function App() {
             </div>
 
             <div className="settings-item">
-              <label>
-                CPU有効
-              </label>
-              <button
-                type="button"
-                className={
-                  cpuEnabled
-                    ? "toggle active"
-                    : "toggle"
-                }
-                onClick={() => {
-                  applySettings(
-                    !cpuEnabled,
-                    maxPlayers,
-                    maxHands
-                  );
-                }}
-              >
-                {cpuEnabled ? "ON" : "OFF"}
-              </button>
-            </div>
-
-            <div className="settings-item">
               <label htmlFor="maxPlayers">
                 認識人数上限
               </label>
@@ -2958,13 +3544,11 @@ function App() {
                 value={maxPlayers}
                 onChange={(event) => {
                   applySettings(
-                    cpuEnabled,
                     Number(event.target.value),
                     maxHands
                   );
                 }}
               >
-                <option value={1}>1人</option>
                 <option value={2}>2人</option>
                 <option value={3}>3人</option>
                 <option value={4}>4人</option>
@@ -2980,15 +3564,11 @@ function App() {
                 value={maxHands}
                 onChange={(event) => {
                   applySettings(
-                    cpuEnabled,
                     maxPlayers,
                     Number(event.target.value)
                   );
                 }}
               >
-                <option value={1}>1手</option>
-                <option value={2}>2手</option>
-                <option value={3}>3手</option>
                 <option value={4}>4手</option>
                 <option value={5}>5手</option>
                 <option value={6}>6手</option>
@@ -3017,11 +3597,7 @@ function App() {
               決着
             </div>
             <div className="battle-result-winner">
-              {battleWinner === "PLAYER"
-                ? "PLAYER WIN"
-                : cpuEnabled
-                  ? "CPU WIN"
-                  : "PLAYER WIN"}
+              {battleWinner} WIN
             </div>
             <div className="battle-result-sub">
               HPが残っている方の勝ち
@@ -3059,15 +3635,13 @@ function App() {
 
       <div className="status-row">
         <div className="tiny-panel">
-          <span>PLAYER HP</span>
+          <span>PLAYER 1 HP</span>
           <strong>{playerHP}</strong>
         </div>
-        {cpuEnabled && (
-          <div className="tiny-panel cpu-panel">
-            <span>CPU HP</span>
-            <strong>{cpuHP}</strong>
-          </div>
-        )}
+        <div className="tiny-panel player2-panel">
+          <span>PLAYER 2 HP</span>
+          <strong>{player2HP}</strong>
+        </div>
       </div>
 
       <div className="camera">
@@ -3106,6 +3680,35 @@ function App() {
         <div className="status">
           {status}
         </div>
+
+        {playerMarkers.map(
+          (marker) => (
+            <div
+              key={marker.id}
+              className={[
+                "player-marker",
+                marker.id,
+                marker.damaged
+                  ? "damaged"
+                  : "",
+                marker.attacking
+                  ? "attacking"
+                  : "",
+              ].join(" ")}
+              style={{
+                left: `${marker.x * 100}%`,
+                top: `${marker.y * 100}%`,
+              }}
+            >
+              <span>
+                {getPlayerLabel(marker.id)}
+              </span>
+              <small>
+                {marker.handCount} HANDS
+              </small>
+            </div>
+          )
+        )}
 
         {modelReady && (
           <div
