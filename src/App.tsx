@@ -6,6 +6,7 @@ import {
   FaceLandmarker,
 } from "@mediapipe/tasks-vision";
 
+
 import "./App.css";
 
 type Point = {
@@ -100,7 +101,7 @@ function getEyeRatio(
 
   return (vertical1 + vertical2) / (2 * horizontal);
 }
-
+        
 function App() {
   const videoRef =
     useRef<HTMLVideoElement>(null);
