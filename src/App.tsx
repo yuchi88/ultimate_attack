@@ -8,6 +8,7 @@ import {
 
 
 import "./App.css";
+import Settings from "./pages/setting/setting";
 
 type Point = {
   x: number;
@@ -1277,6 +1278,9 @@ function drawFireballs(
 }
 	         
 function App() {
+  const [showSettings, setShowSettings] =
+    useState(false);
+
   const videoRef =
     useRef<HTMLVideoElement>(null);
 
@@ -1858,24 +1862,29 @@ function App() {
                 )
               );
 
-            fireballsRef.current = [
-              ...fireballsRef.current,
-              {
-                x: center.x,
-                y: center.y,
-                vx:
-                  direction.x *
-                  fireballSpeed,
-                vy:
-                  direction.y *
-                  fireballSpeed,
-                radius:
-                  0.035 +
-                  chargeRatio * 0.075,
-                life: 1700,
-                maxLife: 1700,
-              },
-            ].slice(-8);
+            const fireballEnabled =
+              localStorage.getItem("fireballEnabled") !== "false";
+
+            if (fireballEnabled) {
+              fireballsRef.current = [
+                ...fireballsRef.current,
+                {
+                  x: center.x,
+                  y: center.y,
+                  vx:
+                    direction.x *
+                    fireballSpeed,
+                  vy:
+                    direction.y *
+                    fireballSpeed,
+                  radius:
+                    0.035 +
+                    chargeRatio * 0.075,
+                  life: 1700,
+                  maxLife: 1700,
+                },
+              ].slice(-8);
+            }
 
             state.charge = 0;
             state.cooldown =
@@ -2459,6 +2468,36 @@ function App() {
   return (
     <div className="app">
 
+      {showSettings && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 1000,
+            background: "#111",
+            overflowY: "auto",
+          }}
+        >
+          <button
+            onClick={() => setShowSettings(false)}
+            style={{
+              position: "fixed",
+              top: "20px",
+              left: "20px",
+              zIndex: 1001,
+              padding: "10px 18px",
+              borderRadius: "8px",
+              border: "none",
+              cursor: "pointer",
+            }}
+          >
+            ← 戻る
+          </button>
+
+          <Settings />
+        </div>
+      )}
+
       <h1>
         必殺技ジェネレーター
       </h1>
@@ -2466,6 +2505,20 @@ function App() {
       <p className="subtitle">
         ULTIMATE ATTACK SYSTEM
       </p>
+
+      <button
+        onClick={() => setShowSettings(true)}
+        style={{
+          marginBottom: "20px",
+          padding: "12px 24px",
+          borderRadius: "8px",
+          border: "none",
+          cursor: "pointer",
+          fontSize: "16px",
+        }}
+      >
+        ⚙ 設定
+      </button>
 
       <div className="camera">
 

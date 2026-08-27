@@ -1,0 +1,220 @@
+import "./setting.css";
+import { useEffect, useState } from "react";
+
+function Settings() {
+  const [maxPlayers, setMaxPlayers] = useState(4);
+  const [maxHands, setMaxHands] = useState(8);
+  const [fireballEnabled, setFireballEnabled] = useState(true);
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [volume, setVolume] = useState(80);
+
+  useEffect(() => {
+    const savedPlayers = localStorage.getItem("maxPlayers");
+    const savedHands = localStorage.getItem("maxHands");
+    const savedFireball = localStorage.getItem("fireballEnabled");
+    const savedSound = localStorage.getItem("soundEnabled");
+    const savedVolume = localStorage.getItem("volume");
+
+    if (savedPlayers) setMaxPlayers(Number(savedPlayers));
+    if (savedHands) setMaxHands(Number(savedHands));
+
+    if (savedFireball !== null) {
+      setFireballEnabled(savedFireball === "true");
+    }
+
+    if (savedSound !== null) {
+      setSoundEnabled(savedSound === "true");
+    }
+
+    if (savedVolume) {
+      setVolume(Number(savedVolume));
+    }
+  }, []);
+
+  const handlePlayersChange = (value: number) => {
+    setMaxPlayers(value);
+    localStorage.setItem("maxPlayers", String(value));
+  };
+
+  const handleHandsChange = (value: number) => {
+    setMaxHands(value);
+    localStorage.setItem("maxHands", String(value));
+  };
+
+  const handleFireballChange = (value: boolean) => {
+    setFireballEnabled(value);
+    localStorage.setItem("fireballEnabled", String(value));
+  };
+
+  const handleSoundChange = (value: boolean) => {
+    setSoundEnabled(value);
+    localStorage.setItem("soundEnabled", String(value));
+  };
+
+  const handleVolumeChange = (value: number) => {
+    setVolume(value);
+    localStorage.setItem("volume", String(value));
+  };
+
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        padding: "40px 20px",
+        background: "#111",
+        color: "#fff",
+      }}
+    >
+      <div
+        style={{
+          maxWidth: "700px",
+          margin: "0 auto",
+        }}
+      >
+        <h1
+          style={{
+            fontSize: "36px",
+            marginBottom: "30px",
+          }}
+        >
+          設定
+        </h1>
+
+        <section
+          style={{
+            background: "#1c1c1c",
+            padding: "24px",
+            borderRadius: "16px",
+            marginBottom: "20px",
+          }}
+        >
+          <h2>認識設定</h2>
+
+          <div style={{ marginTop: "20px" }}>
+            <label>最大認識人数</label>
+
+            <select
+              value={maxPlayers}
+              onChange={(e) =>
+                handlePlayersChange(Number(e.target.value))
+              }
+              style={{
+                display: "block",
+                marginTop: "8px",
+                padding: "10px",
+                width: "100%",
+              }}
+            >
+              <option value={1}>1人</option>
+              <option value={2}>2人</option>
+              <option value={3}>3人</option>
+              <option value={4}>4人</option>
+            </select>
+          </div>
+
+          <div style={{ marginTop: "20px" }}>
+            <label>最大認識手数</label>
+
+            <select
+              value={maxHands}
+              onChange={(e) =>
+                handleHandsChange(Number(e.target.value))
+              }
+              style={{
+                display: "block",
+                marginTop: "8px",
+                padding: "10px",
+                width: "100%",
+              }}
+            >
+              <option value={2}>2本</option>
+              <option value={4}>4本</option>
+              <option value={6}>6本</option>
+              <option value={8}>8本</option>
+            </select>
+          </div>
+        </section>
+
+        <section
+          style={{
+            background: "#1c1c1c",
+            padding: "24px",
+            borderRadius: "16px",
+            marginBottom: "20px",
+          }}
+        >
+          <h2>エフェクト</h2>
+
+          <div
+            style={{
+              marginTop: "20px",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <span>火球エフェクト</span>
+
+            <input
+              type="checkbox"
+              checked={fireballEnabled}
+              onChange={(e) =>
+                handleFireballChange(e.target.checked)
+              }
+            />
+          </div>
+        </section>
+
+        <section
+          style={{
+            background: "#1c1c1c",
+            padding: "24px",
+            borderRadius: "16px",
+          }}
+        >
+          <h2>サウンド</h2>
+
+          <div
+            style={{
+              marginTop: "20px",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <span>効果音</span>
+
+            <input
+              type="checkbox"
+              checked={soundEnabled}
+              onChange={(e) =>
+                handleSoundChange(e.target.checked)
+              }
+            />
+          </div>
+
+          <div style={{ marginTop: "25px" }}>
+            <label>音量：{volume}%</label>
+
+            <input
+              type="range"
+              min="0"
+              max="100"
+              value={volume}
+              onChange={(e) =>
+                handleVolumeChange(Number(e.target.value))
+              }
+              style={{
+                display: "block",
+                width: "100%",
+                marginTop: "10px",
+              }}
+            />
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+export default Settings;
