@@ -5,7 +5,7 @@ import {
   type PoseLandmarkerResult,
 } from "@mediapipe/tasks-vision";
 
-import Home from "./pages/Home";
+import Home from "./pages/home/home.tsx";
 
 function App() {
   return <Home />;
