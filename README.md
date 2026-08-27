@@ -1,75 +1,160 @@
-# React + TypeScript + Vite
+# ultimate_attack
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+カメラ映像から MediaPipe で姿勢を検出し、画面上に骨格を描画する React + TypeScript + Vite プロジェクトです。
 
-Currently, two official plugins are available:
+## セットアップ
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+```sh
+npm install
 ```
 
-You can also install [eslint-plugin-react-x](https://npmx.dev/package/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://npmx.dev/package/eslint-plugin-react-dom) for React-specific lint rules:
+## 開発コマンド
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+```sh
+# 開発サーバーを起動
+npm run dev
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+# 本番ビルド
+npm run build
 
+# ESLintで確認
+npm run lint
+
+# ビルド結果をプレビュー
+npm run preview
+```
+
+## 使用駆動開発の進め方
+
+このプロジェクトでは、実際に使う場面を起点にして機能を育てていきます。
+
+### 基本方針
+
+- まず「誰が、どんな状況で、何をしたいのか」を言葉にしてから実装します。
+- 機能は完成形を一度に作り込まず、使える最小単位から追加します。
+- 実装後は必ずローカルで動かし、想定した使い方が自然にできるか確認します。
+- 画面上の見た目だけでなく、操作の流れ、反応のわかりやすさ、失敗時の扱いも確認します。
+- 迷ったときは、内部都合よりもユーザーが直感的に使えることを優先します。
+
+### 変更するときの決まり
+
+- 変更前に、今回改善したい使用シーンを短く書き出します。
+- 1回の変更では、なるべく1つの使用シーンに集中します。
+- 大きな機能は、小さな確認可能なステップに分けて進めます。
+- カメラ、姿勢推定、演出など体験に関わる変更は、実際の動作確認を重視します。
+- 方向性が揺らぎそうだと感じた場合は、変更を加える前に必ず確認を取ります。
+- 使いにくさや違和感を見つけたら、README やメモに残して次の改善につなげます。
+
+### 完了条件
+
+- 想定した使用シーンで動作することを確認できている。
+- 画面上でユーザーが次に何をすればよいか迷いにくい。
+- エラーや未準備状態がある場合、ユーザーに伝わる表示になっている。
+- 既存の主要な使い方を壊していない。
+- 必要に応じて README や関連メモが更新されている。
+
+## Git運用ルール
+
+### ブランチ
+
+- 作業は `main` ではなく `dev` ブランチから始めます。
+- `main` や `dev` に直接作業コミットを積まず、機能ごとに作業ブランチを作ります。
+- 作業ブランチ名は `担当者/やること` の形にします。
+- 新しいブランチを作る際は、作業内容が伝わる適切なブランチ名を設定します。
+
+例:
+
+```txt
+yucchin/create_login_ui
+waki/create_auth_system
+```
+
+`dev` で動作確認して問題がない状態を作ってから、`main` に反映します。
+
+### 開発の流れ
+
+```sh
+# 1. devブランチに切り替える
+git checkout dev
+
+# 2. 最新の状態に更新
+git pull origin dev
+
+# 3. 新しい作業ブランチを作成
+git checkout -b <担当者/やること>
+
+# 4. 変更を加える
+
+# 5. 変更をステージング
+git add .
+
+# 6. コミット
+git commit -m "接頭辞:やったこと"
+
+# 7. リモートにプッシュ
+git push origin <担当者/やること>
+```
+
+プッシュ後、GitHubでプルリクエストを作成して `dev` にマージします。
+
+## Commitルール
+
+コミットメッセージは、次の形で書きます。
+
+```txt
+接頭辞:やったこと
+```
+
+例:
+
+```txt
+feat:認証機能の実装
+fix:ログインボタンのバグ修正
+refactor:ユーザー情報取得処理の最適化
+docs:READMEの更新
+style:コードフォーマットの統一
+```
+
+### 接頭辞
+
+- `feat`: 新機能の追加
+- `ui`: UIの変更
+- `remove`: 削除
+- `fix`: バグ修正
+- `docs`: ドキュメントのみの変更
+- `style`: 挙動に影響しないコード整形・スタイル変更
+- `refactor`: 機能追加・修正を伴わないリファクタリング
+- `perf`: パフォーマンス改善
+- `test`: テスト関連の追加・修正
+- `wip`: 作業途中
+- `chore`: ビルド、ツール、依存パッケージなどの雑多な変更
+
+コミットメッセージを書かずにコミットすると時間がかかることがあるため、必ずメッセージを書いてからコミットします。
+
+## よく使うGitコマンド
+
+```sh
+# 現在の状態を確認
+git status
+
+# ブランチ一覧を確認
+git branch
+
+# ブランチを切り替え
+git checkout <ブランチ名>
+
+# ブランチを削除
+git branch -d <ブランチ名>
+
+# 変更を一時的に退避
+git stash
+
+# 退避した変更を戻す
+git stash pop
+
+# コミット履歴を確認
+git log
+
+# 特定のブランチの変更を取り込む
+git merge <ブランチ名>
 ```
