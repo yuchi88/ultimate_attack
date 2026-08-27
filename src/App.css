@@ -229,6 +229,42 @@ button {
   box-shadow: 0 0 24px rgba(204, 92, 255, 0.95);
 }
 
+.player-marker.attacking small {
+  background: rgba(18, 86, 120, 0.88);
+  box-shadow: 0 0 18px rgba(88, 214, 255, 0.82);
+}
+
+.player-marker.attacking::before {
+  border-color: #8eeeff;
+  box-shadow:
+    0 0 30px rgba(88, 214, 255, 0.95),
+    inset 0 0 24px rgba(116, 235, 255, 0.35);
+  opacity: 0.95;
+}
+
+.thunder-charge {
+  position: relative;
+  width: 96px;
+  height: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(210, 248, 255, 0.9);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.72);
+  box-shadow: 0 0 16px rgba(88, 214, 255, 0.65);
+}
+
+.thunder-charge b {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    #6fe7ff,
+    #ffffff
+  );
+  box-shadow: 0 0 18px rgba(255, 255, 255, 0.95);
+}
+
 .player-marker.damaged::before {
   border-color: #ff2b2b;
   background: rgba(255, 0, 0, 0.2);

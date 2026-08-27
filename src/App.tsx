@@ -46,6 +46,15 @@ type HitEffect = {
   target: PlayerId;
 };
 
+type LightningEffect = {
+  x: number;
+  y: number;
+  life: number;
+  maxLife: number;
+  target: PlayerId;
+  seed: number;
+};
+
 type PunchHandState = {
   previousCenter: Point | null;
   previousSize: number;
@@ -73,6 +82,11 @@ const BEAM_TARGET_RADIUS_SCALE = 0.52;
 const FIREBALL_DAMAGE = 12;
 const SHOCKWAVE_DAMAGE = 7;
 const SHOCKWAVE_HIT_RADIUS = 0.16;
+const THUNDER_DAMAGE = 32;
+const THUNDER_CHARGE_TIME = 1100;
+const THUNDER_COOLDOWN = 4200;
+const THUNDER_HAND_DISTANCE = 0.18;
+const THUNDER_ABOVE_HEAD_MARGIN = 0.08;
 
 type BattleWinner = "PLAYER 1" | "PLAYER 2";
 
@@ -95,6 +109,8 @@ type PlayerMarker = {
   damaged: boolean;
   attacking: boolean;
   handCount: number;
+  chargingThunder: boolean;
+  thunderProgress: number;
 };
 
 type HandAssignment = {
@@ -104,7 +120,11 @@ type HandAssignment = {
 
 type AttackRecord = {
   id: number;
-  type: "beam" | "fireball" | "shockwave";
+  type:
+    | "beam"
+    | "fireball"
+    | "shockwave"
+    | "thunder";
   owner: PlayerId;
   target: PlayerId | null;
   startedAt: number;
@@ -1373,6 +1393,108 @@ function drawHitEffects(
   });
 }
 
+function drawLightningEffects(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  effects: LightningEffect[]
+) {
+  effects.forEach((effect) => {
+    const alpha =
+      effect.life / effect.maxLife;
+    const targetX =
+      effect.x * canvas.width;
+    const targetY =
+      effect.y * canvas.height;
+    const startY = 0;
+    const segments = 8;
+
+    ctx.save();
+    ctx.globalCompositeOperation =
+      "lighter";
+    ctx.globalAlpha =
+      Math.min(1, alpha * 1.4);
+    ctx.lineCap = "round";
+
+    for (let bolt = 0; bolt < 3; bolt += 1) {
+      ctx.beginPath();
+      ctx.moveTo(
+        targetX +
+          Math.sin(effect.seed + bolt) *
+            34,
+        startY
+      );
+
+      for (
+        let index = 1;
+        index <= segments;
+        index += 1
+      ) {
+        const progress =
+          index / segments;
+        const jag =
+          Math.sin(
+            effect.seed * 3 +
+              bolt * 11 +
+              index * 2.7
+          ) *
+          34 *
+          (1 - progress * 0.35);
+
+        ctx.lineTo(
+          targetX + jag,
+          targetY * progress
+        );
+      }
+
+      ctx.strokeStyle =
+        bolt === 0
+          ? "rgba(255, 255, 255, 1)"
+          : "rgba(88, 214, 255, 0.82)";
+      ctx.lineWidth =
+        bolt === 0 ? 8 : 18;
+      ctx.shadowColor =
+        "rgba(100, 220, 255, 1)";
+      ctx.shadowBlur = 24;
+      ctx.stroke();
+    }
+
+    const burst =
+      ctx.createRadialGradient(
+        targetX,
+        targetY,
+        4,
+        targetX,
+        targetY,
+        150 * (1 - alpha + 0.4)
+      );
+
+    burst.addColorStop(
+      0,
+      `rgba(255, 255, 255, ${alpha})`
+    );
+    burst.addColorStop(
+      0.35,
+      `rgba(94, 221, 255, ${0.75 * alpha})`
+    );
+    burst.addColorStop(
+      1,
+      "rgba(0, 80, 255, 0)"
+    );
+
+    ctx.fillStyle = burst;
+    ctx.beginPath();
+    ctx.arc(
+      targetX,
+      targetY,
+      150 * (1 - alpha + 0.4),
+      0,
+      Math.PI * 2
+    );
+    ctx.fill();
+    ctx.restore();
+  });
+}
+
 function getMouthBeamInfo(
   face: Point[],
   target?: Point
@@ -1606,10 +1728,10 @@ function getFaceAttackState(face: Point[]) {
     mouthRatio > 0.22;
 
   const leftEyeOpen =
-    leftEyeRatio > 0.65;
+    leftEyeRatio > 0.55;
 
   const rightEyeOpen =
-    rightEyeRatio > 0.65;
+    rightEyeRatio > 0.55;
 
   return {
     mouthRatio,
@@ -1754,6 +1876,83 @@ function getHandAnchor(hand: Point[]) {
     getFistCenter(hand);
 }
 
+function isThunderPrayerPose(
+  assignment: HandAssignment
+) {
+  if (assignment.hands.length < 2) {
+    return false;
+  }
+
+  const firstHand =
+    assignment.hands[0];
+  const secondHand =
+    assignment.hands[1];
+  const firstPalm =
+    getPalmCenter(firstHand);
+  const secondPalm =
+    getPalmCenter(secondHand);
+  const firstFingerCenter =
+    getFingerCenter(firstHand) ??
+    getFistCenter(firstHand);
+  const secondFingerCenter =
+    getFingerCenter(secondHand) ??
+    getFistCenter(secondHand);
+
+  if (
+    !firstPalm ||
+    !secondPalm ||
+    !firstFingerCenter ||
+    !secondFingerCenter
+  ) {
+    return false;
+  }
+
+  const headLine =
+    assignment.player.center.y -
+    assignment.player.radius *
+      0.35 -
+    THUNDER_ABOVE_HEAD_MARGIN;
+
+  const palmsAboveHead =
+    firstPalm.y < headLine &&
+    secondPalm.y < headLine;
+
+  const fingersAboveHead =
+    firstFingerCenter.y < headLine &&
+    secondFingerCenter.y < headLine;
+
+  const palmsClose =
+    distance(firstPalm, secondPalm) <
+    THUNDER_HAND_DISTANCE;
+
+  const fingersClose =
+    distance(
+      firstFingerCenter,
+      secondFingerCenter
+    ) <
+    THUNDER_HAND_DISTANCE;
+
+  const center =
+    getMidPoint(
+      firstPalm,
+      secondPalm
+    );
+
+  const centeredAbovePlayer =
+    Math.abs(
+      center.x -
+        assignment.player.center.x
+    ) <
+    assignment.player.radius * 1.8;
+
+  return (
+    palmsAboveHead &&
+    fingersAboveHead &&
+    (palmsClose || fingersClose) &&
+    centeredAbovePlayer
+  );
+}
+
 function assignHandsToPlayers(
   hands: Point[][],
   players: BattlePlayer[]
@@ -1868,6 +2067,9 @@ function App() {
   const hitEffectsRef =
     useRef<HitEffect[]>([]);
 
+  const lightningEffectsRef =
+    useRef<LightningEffect[]>([]);
+
   const attackRecordsRef =
     useRef<AttackRecord[]>([]);
 
@@ -1890,6 +2092,18 @@ function App() {
     });
 
   const damageFlashUntilRef =
+    useRef<Record<PlayerId, number>>({
+      player1: 0,
+      player2: 0,
+    });
+
+  const thunderChargeStartedRef =
+    useRef<Record<PlayerId, number | null>>({
+      player1: null,
+      player2: null,
+    });
+
+  const thunderCooldownUntilRef =
     useRef<Record<PlayerId, number>>({
       player1: 0,
       player2: 0,
@@ -2002,6 +2216,15 @@ function App() {
     nextAttackIdRef.current = 1;
     fireballsRef.current = [];
     hitEffectsRef.current = [];
+    lightningEffectsRef.current = [];
+    thunderChargeStartedRef.current = {
+      player1: null,
+      player2: null,
+    };
+    thunderCooldownUntilRef.current = {
+      player1: 0,
+      player2: 0,
+    };
     setPlayerMarkers([]);
   };
 
@@ -2271,6 +2494,22 @@ function App() {
     ].slice(-12);
   };
 
+  const spawnLightningEffect = (
+    target: BattlePlayer
+  ) => {
+    lightningEffectsRef.current = [
+      ...lightningEffectsRef.current,
+      {
+        x: target.center.x,
+        y: target.center.y,
+        life: 760,
+        maxLife: 760,
+        target: target.id,
+        seed: Math.random() * 1000,
+      },
+    ].slice(-6);
+  };
+
   const recordAttack = (
     type: AttackRecord["type"],
     owner: PlayerId,
@@ -2322,6 +2561,43 @@ function App() {
               }
             : attack
       );
+  };
+
+  const triggerThunderAttack = (
+    attacker: BattlePlayer,
+    defender: BattlePlayer,
+    time: number
+  ) => {
+    const attack =
+      recordAttack(
+        "thunder",
+        attacker.id,
+        defender.id,
+        time
+      );
+
+    markAttackHit(
+      attack.id,
+      time
+    );
+
+    spawnLightningEffect(defender);
+
+    applyBattleDamage(
+      defender.id,
+      THUNDER_DAMAGE,
+      defender.center.x,
+      defender.center.y,
+      "#f8fbff"
+    );
+
+    thunderCooldownUntilRef.current[
+      attacker.id
+    ] =
+      time + THUNDER_COOLDOWN;
+    thunderChargeStartedRef.current[
+      attacker.id
+    ] = null;
   };
 
   const applyBattleDamage = (
@@ -2939,6 +3215,75 @@ function App() {
         battlePlayers
       );
 
+      const thunderChargingPlayers =
+        new Set<PlayerId>();
+
+      handAssignments.forEach(
+        (assignment) => {
+          const charging =
+            isThunderPrayerPose(
+              assignment
+            );
+
+          if (
+            !charging ||
+            now <
+              thunderCooldownUntilRef.current[
+                assignment.player.id
+              ]
+          ) {
+            thunderChargeStartedRef.current[
+              assignment.player.id
+            ] = null;
+            return;
+          }
+
+          thunderChargingPlayers.add(
+            assignment.player.id
+          );
+
+          if (
+            thunderChargeStartedRef.current[
+              assignment.player.id
+            ] === null
+          ) {
+            thunderChargeStartedRef.current[
+              assignment.player.id
+            ] = now;
+          }
+
+          const defender =
+            getOpponent(
+              assignment.player,
+              battlePlayers
+            );
+
+          if (!defender) {
+            return;
+          }
+
+          const chargeStarted =
+            thunderChargeStartedRef.current[
+              assignment.player.id
+            ];
+
+          if (
+            chargeStarted !== null &&
+            now - chargeStarted >=
+              THUNDER_CHARGE_TIME
+          ) {
+            triggerThunderAttack(
+              assignment.player,
+              defender,
+              now
+            );
+            thunderChargingPlayers.delete(
+              assignment.player.id
+            );
+          }
+        }
+      );
+
       const activePlayer =
         battlePlayers.find(
           (player) =>
@@ -2950,27 +3295,49 @@ function App() {
         faceAttackStates[0];
 
       setPlayerMarkers(
-        battlePlayers.map((player) => ({
-          handCount:
-            handAssignments.find(
-              (assignment) =>
-                assignment.player.id ===
-                player.id
-            )?.hands.length ?? 0,
-          id: player.id,
-          x: 1 - player.center.x,
-          y: Math.max(
-            0.08,
-            player.center.y - player.radius
-          ),
-          damaged:
-            now <
-            damageFlashUntilRef.current[
+        battlePlayers.map((player) => {
+          const thunderStarted =
+            thunderChargeStartedRef.current[
               player.id
-            ],
-          attacking:
-            player.attack.beamActive,
-        }))
+            ];
+
+          return {
+            handCount:
+              handAssignments.find(
+                (assignment) =>
+                  assignment.player.id ===
+                  player.id
+              )?.hands.length ?? 0,
+            id: player.id,
+            x: 1 - player.center.x,
+            y: Math.max(
+              0.08,
+              player.center.y - player.radius
+            ),
+            damaged:
+              now <
+              damageFlashUntilRef.current[
+                player.id
+              ],
+            attacking:
+              player.attack.beamActive ||
+              thunderChargingPlayers.has(
+                player.id
+              ),
+            chargingThunder:
+              thunderChargingPlayers.has(
+                player.id
+              ),
+            thunderProgress:
+              thunderStarted === null
+                ? 0
+                : Math.min(
+                    1,
+                    (now - thunderStarted) /
+                      THUNDER_CHARGE_TIME
+                  ),
+          };
+        })
       );
 
       setMouthRatio(
@@ -2994,6 +3361,14 @@ function App() {
 
       hitEffectsRef.current =
         hitEffectsRef.current
+          .map((effect) => ({
+            ...effect,
+            life: effect.life - 16,
+          }))
+          .filter((effect) => effect.life > 0);
+
+      lightningEffectsRef.current =
+        lightningEffectsRef.current
           .map((effect) => ({
             ...effect,
             life: effect.life - 16,
@@ -3310,6 +3685,12 @@ function App() {
       ctx,
       canvas,
       hitEffectsRef.current
+    );
+
+    drawLightningEffects(
+      ctx,
+      canvas,
+      lightningEffectsRef.current
     );
 
     const HAND_CONNECTIONS = [
@@ -3704,8 +4085,22 @@ function App() {
                 {getPlayerLabel(marker.id)}
               </span>
               <small>
-                {marker.handCount} HANDS
+                {marker.chargingThunder
+                  ? "THUNDER"
+                  : `${marker.handCount} HANDS`}
               </small>
+              {marker.chargingThunder && (
+                <div className="thunder-charge">
+                  <b
+                    style={{
+                      width: `${
+                        marker.thunderProgress *
+                        100
+                      }%`,
+                    }}
+                  />
+                </div>
+              )}
             </div>
           )
         )}
