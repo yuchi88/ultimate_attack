@@ -1466,6 +1466,9 @@ function App() {
   const cpuBeamUntilRef =
     useRef(0);
 
+  const battleStartedRef =
+    useRef(false);
+
   const [playerHP, setPlayerHP] =
     useState(100);
 
@@ -1730,6 +1733,8 @@ function App() {
     if (battleWinner) {
       return;
     }
+
+    battleStartedRef.current = true;
 
     if (target === "cpu") {
       setCpuHP((current) => {
@@ -2358,9 +2363,13 @@ function App() {
       }
 
       const cpuBeamActive =
+        battleStartedRef.current &&
         now < cpuBeamUntilRef.current;
 
-      if (!cpuBeamActive) {
+      if (!battleStartedRef.current) {
+        cpuBeamUntilRef.current =
+          now + 2000;
+      } else if (!cpuBeamActive) {
         cpuBeamUntilRef.current =
           now + 1600;
       }
