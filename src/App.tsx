@@ -142,10 +142,10 @@ function App() {
     useState(false);
 
   const [leftEyeOpen, setLeftEyeOpen] =
-    useState(true);
+    useState(false);
 
   const [rightEyeOpen, setRightEyeOpen] =
-    useState(true);
+    useState(false);
 
   const [leftEyeRatio, setLeftEyeRatio] =
     useState(0);
@@ -184,6 +184,7 @@ function App() {
       streamRef.current = stream;
 
       if (!videoRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
         return;
       }
 
@@ -385,8 +386,8 @@ function App() {
       lastTimeRef.current =
         video.currentTime;
 
-      const now =
-        performance.now();
+      // eslint-disable-next-line react-hooks/purity
+      const now = performance.now();
 
       // 手
       const handResult =
@@ -948,7 +949,7 @@ function App() {
           <strong>
             LEFT EYE: {leftEyeOpen ? "OPEN" : "CLOSED"}
           </strong>
-          <span>　</span>
+          <span></span>
           <strong>
             RIGHT EYE: {rightEyeOpen ? "OPEN" : "CLOSED"}
           </strong>
@@ -956,7 +957,7 @@ function App() {
 
         <div className="eye-debug">
           LEFT: {leftEyeRatio.toFixed(3)}
-          <span>　</span>
+          <span></span>
           RIGHT: {rightEyeRatio.toFixed(3)}
         </div>
 
