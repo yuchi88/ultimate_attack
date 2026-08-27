@@ -31,6 +31,16 @@ type Fireball = {
   maxLife: number;
 };
 
+type HitEffect = {
+  x: number;
+  y: number;
+  life: number;
+  maxLife: number;
+  radius: number;
+  color: string;
+  damage: number;
+};
+
 type PunchHandState = {
   previousCenter: Point | null;
   previousSize: number;
@@ -1275,7 +1285,150 @@ function drawFireballs(
 
   ctx.restore();
 }
-	         
+
+function drawHitEffects(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  effects: HitEffect[]
+) {
+  effects.forEach((effect) => {
+    const alpha = effect.life / effect.maxLife;
+    const radius =
+      effect.radius *
+      Math.min(canvas.width, canvas.height) *
+      (0.55 + (1 - alpha) * 1.2);
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = effect.color;
+    ctx.strokeStyle = effect.color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(
+      effect.x * canvas.width,
+      effect.y * canvas.height,
+      radius,
+      0,
+      Math.PI * 2
+    );
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  });
+}
+
+function getMouthBeamInfo(face: Point[]) {
+  const upperLip = face[13];
+  const lowerLip = face[14];
+  const noseTip = face[1];
+  const leftCheek = face[234];
+  const rightCheek = face[454];
+
+  if (
+    !upperLip ||
+    !lowerLip ||
+    !noseTip ||
+    !leftCheek ||
+    !rightCheek
+  ) {
+    return null;
+  }
+
+  const mouthCenter = getMidPoint(
+    upperLip,
+    lowerLip
+  );
+  const faceCenter = getMidPoint(
+    leftCheek,
+    rightCheek
+  );
+  const direction = getNormalizedDirection(
+    faceCenter,
+    noseTip
+  );
+
+  return {
+    start: {
+      x: mouthCenter.x,
+      y: mouthCenter.y,
+      z: 0,
+    },
+    direction,
+    end: {
+      x: mouthCenter.x + direction.x * 1.2,
+      y: mouthCenter.y + direction.y * 1.2,
+      z: 0,
+    },
+  };
+}
+
+function pointToSegmentDistance(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number
+) {
+  const vx = bx - ax;
+  const vy = by - ay;
+  const wx = px - ax;
+  const wy = py - ay;
+
+  const lengthSq = vx * vx + vy * vy;
+
+  if (lengthSq === 0) {
+    return Math.hypot(px - ax, py - ay);
+  }
+
+  const t =
+    Math.max(
+      0,
+      Math.min(
+        1,
+        (wx * vx + wy * vy) / lengthSq
+      )
+    );
+
+  const cx = ax + t * vx;
+  const cy = ay + t * vy;
+
+  return Math.hypot(px - cx, py - cy);
+}
+
+function isBeamCollidingWithTarget(
+  beamStart: Point,
+  beamEnd: Point,
+  targetCenter: Point,
+  targetRadius: number
+) {
+  const distance = pointToSegmentDistance(
+    targetCenter.x,
+    targetCenter.y,
+    beamStart.x,
+    beamStart.y,
+    beamEnd.x,
+    beamEnd.y
+  );
+
+  return distance <= targetRadius;
+}
+
+function getTimerWinner(
+  playerHp: number,
+  cpuHp: number
+): "PLAYER" | "CPU" | null {
+  if (playerHp <= 0 && cpuHp > 0) {
+    return "CPU";
+  }
+
+  if (cpuHp <= 0 && playerHp > 0) {
+    return "PLAYER";
+  }
+
+  return null;
+}
+
 function App() {
   const videoRef =
     useRef<HTMLVideoElement>(null);
@@ -1306,6 +1459,21 @@ function App() {
 
   const fireballsRef =
     useRef<Fireball[]>([]);
+
+  const hitEffectsRef =
+    useRef<HitEffect[]>([]);
+
+  const cpuBeamUntilRef =
+    useRef(0);
+
+  const [playerHP, setPlayerHP] =
+    useState(100);
+
+  const [cpuHP, setCpuHP] =
+    useState(100);
+
+  const [battleWinner, setBattleWinner] =
+    useState<"PLAYER" | "CPU" | null>(null);
 
   const [cameraStarted, setCameraStarted] =
     useState(false);
@@ -1530,6 +1698,89 @@ function App() {
       requestAnimationFrame(
         detect
       );
+  };
+
+  const spawnHitEffect = (
+    x: number,
+    y: number,
+    color: string,
+    damage: number
+  ) => {
+    hitEffectsRef.current = [
+      ...hitEffectsRef.current,
+      {
+        x,
+        y,
+        life: 600,
+        maxLife: 600,
+        radius: 0.08,
+        color,
+        damage,
+      },
+    ].slice(-12);
+  };
+
+  const applyBattleDamage = (
+    target: "cpu" | "player",
+    amount: number,
+    hitX?: number,
+    hitY?: number,
+    hitColor?: string
+  ) => {
+    if (battleWinner) {
+      return;
+    }
+
+    if (target === "cpu") {
+      setCpuHP((current) => {
+        const next = Math.max(0, current - amount);
+
+        if (hitX !== undefined && hitY !== undefined) {
+          spawnHitEffect(
+            hitX,
+            hitY,
+            hitColor ?? "#ff6b6b",
+            amount
+          );
+        }
+
+        const winner = getTimerWinner(
+          playerHP,
+          next
+        );
+
+        if (winner) {
+          setBattleWinner(winner);
+        }
+
+        return next;
+      });
+      return;
+    }
+
+    setPlayerHP((current) => {
+      const next = Math.max(0, current - amount);
+
+      if (hitX !== undefined && hitY !== undefined) {
+        spawnHitEffect(
+          hitX,
+          hitY,
+          hitColor ?? "#53d4ff",
+          amount
+        );
+      }
+
+      const winner = getTimerWinner(
+        next,
+        cpuHP
+      );
+
+      if (winner) {
+        setBattleWinner(winner);
+      }
+
+      return next;
+    });
   };
 
   const updatePunchFireballs = (
@@ -1879,6 +2130,10 @@ function App() {
   };
 
   const detect = () => {
+    if (battleWinner) {
+      return;
+    }
+
     const video =
       videoRef.current;
 
@@ -1954,28 +2209,18 @@ function App() {
       let currentLeftEyeOpen = false;
       let currentRightEyeOpen = false;
 
-      // ----------------------------
-      // 口の判定
-      // ----------------------------
-
       if (
         faceResult.faceLandmarks.length > 0
       ) {
         const face =
           faceResult.faceLandmarks[0];
 
-        // 上唇中央付近
         const upper =
           face[13];
-
-        // 下唇中央付近
         const lower =
           face[14];
-
-        // 口の左右
         const left =
           face[61];
-
         const right =
           face[291];
 
@@ -2003,7 +2248,6 @@ function App() {
 
           setMouthRatio(ratio);
 
-          // 閾値
           const isOpen =
             ratio > 0.22;
 
@@ -2015,18 +2259,12 @@ function App() {
           );
         } else {
           setMouthOpen(false);
-
           setMouthRatio(0);
         }
       } else {
         setMouthOpen(false);
-
         setMouthRatio(0);
       }
-
-      // ----------------------------
-      // 左目・右目の判定
-      // ----------------------------
 
       if (faceResult.faceLandmarks.length > 0) {
         const face = faceResult.faceLandmarks[0];
@@ -2073,13 +2311,100 @@ function App() {
         setRightEyeRatio(0);
       }
 
+      const playerBeamActive =
+        currentMouthOpen &&
+        currentLeftEyeOpen &&
+        currentRightEyeOpen;
+
+      hitEffectsRef.current =
+        hitEffectsRef.current
+          .map((effect) => ({
+            ...effect,
+            life: effect.life - 16,
+          }))
+          .filter((effect) => effect.life > 0);
+
+      const face =
+        faceResult.faceLandmarks[0];
+
+      if (playerBeamActive && face) {
+        const beamInfo =
+          getMouthBeamInfo(face);
+
+        if (beamInfo) {
+          const cpuTarget = {
+            x: 0.82,
+            y: 0.5,
+            z: 0,
+          };
+
+          const cpuHit = isBeamCollidingWithTarget(
+            beamInfo.start,
+            beamInfo.end,
+            cpuTarget,
+            0.12
+          );
+
+          if (cpuHit) {
+            applyBattleDamage(
+              "cpu",
+              9,
+              0.82,
+              0.5,
+              "#ff6b6b"
+            );
+          }
+        }
+      }
+
+      const cpuBeamActive =
+        now < cpuBeamUntilRef.current;
+
+      if (!cpuBeamActive) {
+        cpuBeamUntilRef.current =
+          now + 1600;
+      }
+
+      if (cpuBeamActive && face) {
+        const cpuBeamStart = {
+          x: 0.8,
+          y: 0.45,
+          z: 0,
+        };
+        const cpuBeamEnd = {
+          x: 0.18,
+          y: 0.38,
+          z: 0,
+        };
+        const playerTarget = {
+          x: 0.2,
+          y: 0.45,
+          z: 0,
+        };
+
+        const playerHit = isBeamCollidingWithTarget(
+          cpuBeamStart,
+          cpuBeamEnd,
+          playerTarget,
+          0.13
+        );
+
+        if (playerHit) {
+          applyBattleDamage(
+            "player",
+            7,
+            0.2,
+            0.45,
+            "#53d4ff"
+          );
+        }
+      }
+
       draw(
         handResult.landmarks,
         poseResult.landmarks,
         faceResult.faceLandmarks,
-        currentMouthOpen &&
-          currentLeftEyeOpen &&
-          currentRightEyeOpen,
+        playerBeamActive,
         fireballsRef.current,
         now
       );
@@ -2237,6 +2562,12 @@ function App() {
       canvas,
       fireballs,
       time
+    );
+
+    drawHitEffects(
+      ctx,
+      canvas,
+      hitEffectsRef.current
     );
 
     const HAND_CONNECTIONS = [
@@ -2424,6 +2755,24 @@ function App() {
   return (
     <div className="app">
 
+      {battleWinner && (
+        <div className="battle-result-screen">
+          <div className="battle-result-card">
+            <div className="battle-result-title">
+              決着
+            </div>
+            <div className="battle-result-winner">
+              {battleWinner === "PLAYER"
+                ? "PLAYER WIN"
+                : "CPU WIN"}
+            </div>
+            <div className="battle-result-sub">
+              HPが残っている方の勝ち
+            </div>
+          </div>
+        </div>
+      )}
+
       <h1>
         必殺技ジェネレーター
       </h1>
@@ -2431,6 +2780,17 @@ function App() {
       <p className="subtitle">
         ULTIMATE ATTACK SYSTEM
       </p>
+
+      <div className="status-row">
+        <div className="tiny-panel">
+          <span>PLAYER HP</span>
+          <strong>{playerHP}</strong>
+        </div>
+        <div className="tiny-panel cpu-panel">
+          <span>CPU HP</span>
+          <strong>{cpuHP}</strong>
+        </div>
+      </div>
 
       <div className="camera">
 
