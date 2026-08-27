@@ -1508,8 +1508,95 @@ function App() {
   const [mouthRatio, setMouthRatio] =
     useState(0);
 
+  const [showSettings, setShowSettings] =
+    useState(false);
+
+  const [cpuEnabled, setCpuEnabled] =
+    useState(true);
+
+  const [maxPlayers, setMaxPlayers] =
+    useState(4);
+
+  const [maxHands, setMaxHands] =
+    useState(2);
+
   const [status, setStatus] =
     useState("カメラを起動してください");
+
+  const applySettings = (
+    nextCpuEnabled: boolean,
+    nextMaxPlayers: number,
+    nextMaxHands: number
+  ) => {
+    const safeMaxPlayers =
+      Math.min(4, Math.max(1, nextMaxPlayers));
+    const safeMaxHands =
+      Math.min(8, Math.max(1, nextMaxHands));
+
+    setCpuEnabled(nextCpuEnabled);
+    setMaxPlayers(safeMaxPlayers);
+    setMaxHands(safeMaxHands);
+
+    localStorage.setItem(
+      "ultimate_cpu_enabled",
+      String(nextCpuEnabled)
+    );
+    localStorage.setItem(
+      "ultimate_max_players",
+      String(safeMaxPlayers)
+    );
+    localStorage.setItem(
+      "ultimate_max_hands",
+      String(safeMaxHands)
+    );
+  };
+
+  const resetBattleState = () => {
+    setPlayerHP(100);
+    setCpuHP(100);
+    setBattleWinner(null);
+    battleStartedRef.current = false;
+    cpuBeamUntilRef.current = 0;
+    fireballsRef.current = [];
+    hitEffectsRef.current = [];
+  };
+
+  useEffect(() => {
+    const storedCpu =
+      localStorage.getItem(
+        "ultimate_cpu_enabled"
+      );
+    const storedPlayers =
+      localStorage.getItem(
+        "ultimate_max_players"
+      );
+    const storedHands =
+      localStorage.getItem(
+        "ultimate_max_hands"
+      );
+
+    setCpuEnabled(
+      storedCpu === null
+        ? true
+        : storedCpu === "true"
+    );
+    setMaxPlayers(
+      storedPlayers
+        ? Math.min(
+            4,
+            Math.max(1, Number(storedPlayers))
+          )
+        : 4
+    );
+    setMaxHands(
+      storedHands
+        ? Math.min(
+            8,
+            Math.max(1, Number(storedHands))
+          )
+        : 2
+    );
+  }, []);
 
   // --------------------------------
   // カメラ
@@ -1594,7 +1681,7 @@ function App() {
 
               runningMode: "VIDEO",
 
-              numHands: 2,
+              numHands: maxHands,
 
               minHandDetectionConfidence: 0.4,
 
@@ -1627,7 +1714,7 @@ function App() {
 
               runningMode: "VIDEO",
 
-              numPoses: 1,
+              numPoses: maxPlayers,
 
               minPoseDetectionConfidence: 0.4,
 
@@ -1660,7 +1747,7 @@ function App() {
 
               runningMode: "VIDEO",
 
-              numFaces: 1,
+              numFaces: maxPlayers,
 
               minFaceDetectionConfidence: 0.4,
 
@@ -1735,6 +1822,10 @@ function App() {
     }
 
     battleStartedRef.current = true;
+
+    if (target === "cpu" && !cpuEnabled) {
+      return;
+    }
 
     if (target === "cpu") {
       setCpuHP((current) => {
@@ -2363,10 +2454,13 @@ function App() {
       }
 
       const cpuBeamActive =
+        cpuEnabled &&
         battleStartedRef.current &&
         now < cpuBeamUntilRef.current;
 
-      if (!battleStartedRef.current) {
+      if (!cpuEnabled) {
+        cpuBeamUntilRef.current = now + 2000;
+      } else if (!battleStartedRef.current) {
         cpuBeamUntilRef.current =
           now + 2000;
       } else if (!cpuBeamActive) {
@@ -2764,6 +2858,104 @@ function App() {
   return (
     <div className="app">
 
+      {showSettings && (
+        <div className="settings-overlay">
+          <div className="settings-panel">
+            <div className="settings-header">
+              <h2>設定</h2>
+              <button
+                type="button"
+                className="close-settings"
+                onClick={() => setShowSettings(false)}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="settings-item">
+              <label>
+                CPU有効
+              </label>
+              <button
+                type="button"
+                className={
+                  cpuEnabled
+                    ? "toggle active"
+                    : "toggle"
+                }
+                onClick={() => {
+                  applySettings(
+                    !cpuEnabled,
+                    maxPlayers,
+                    maxHands
+                  );
+                }}
+              >
+                {cpuEnabled ? "ON" : "OFF"}
+              </button>
+            </div>
+
+            <div className="settings-item">
+              <label htmlFor="maxPlayers">
+                認識人数上限
+              </label>
+              <select
+                id="maxPlayers"
+                value={maxPlayers}
+                onChange={(event) => {
+                  applySettings(
+                    cpuEnabled,
+                    Number(event.target.value),
+                    maxHands
+                  );
+                }}
+              >
+                <option value={1}>1人</option>
+                <option value={2}>2人</option>
+                <option value={3}>3人</option>
+                <option value={4}>4人</option>
+              </select>
+            </div>
+
+            <div className="settings-item">
+              <label htmlFor="maxHands">
+                認識手数上限
+              </label>
+              <select
+                id="maxHands"
+                value={maxHands}
+                onChange={(event) => {
+                  applySettings(
+                    cpuEnabled,
+                    maxPlayers,
+                    Number(event.target.value)
+                  );
+                }}
+              >
+                <option value={1}>1手</option>
+                <option value={2}>2手</option>
+                <option value={3}>3手</option>
+                <option value={4}>4手</option>
+                <option value={5}>5手</option>
+                <option value={6}>6手</option>
+                <option value={7}>7手</option>
+                <option value={8}>8手</option>
+              </select>
+            </div>
+
+            <div className="settings-footer">
+              <button
+                type="button"
+                className="settings-primary"
+                onClick={() => setShowSettings(false)}
+              >
+                適用して戻る
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {battleWinner && (
         <div className="battle-result-screen">
           <div className="battle-result-card">
@@ -2773,11 +2965,24 @@ function App() {
             <div className="battle-result-winner">
               {battleWinner === "PLAYER"
                 ? "PLAYER WIN"
-                : "CPU WIN"}
+                : cpuEnabled
+                  ? "CPU WIN"
+                  : "PLAYER WIN"}
             </div>
             <div className="battle-result-sub">
               HPが残っている方の勝ち
             </div>
+            <button
+              type="button"
+              className="rematch-button"
+              onClick={() => {
+                resetBattleState();
+                setStatus("再戦開始");
+                setShowSettings(false);
+              }}
+            >
+              ↻ 再戦
+            </button>
           </div>
         </div>
       )}
@@ -2790,15 +2995,25 @@ function App() {
         ULTIMATE ATTACK SYSTEM
       </p>
 
+      <button
+        type="button"
+        className="settings-button"
+        onClick={() => setShowSettings(true)}
+      >
+        ⚙ 設定
+      </button>
+
       <div className="status-row">
         <div className="tiny-panel">
           <span>PLAYER HP</span>
           <strong>{playerHP}</strong>
         </div>
-        <div className="tiny-panel cpu-panel">
-          <span>CPU HP</span>
-          <strong>{cpuHP}</strong>
-        </div>
+        {cpuEnabled && (
+          <div className="tiny-panel cpu-panel">
+            <span>CPU HP</span>
+            <strong>{cpuHP}</strong>
+          </div>
+        )}
       </div>
 
       <div className="camera">
