@@ -1429,6 +1429,84 @@ function getTimerWinner(
   return null;
 }
 
+function getFaceAttackState(face: Point[]) {
+  const upper =
+    face[13];
+  const lower =
+    face[14];
+  const left =
+    face[61];
+  const right =
+    face[291];
+
+  let mouthRatio = 0;
+
+  if (
+    upper &&
+    lower &&
+    left &&
+    right
+  ) {
+    const vertical =
+      distance(
+        upper,
+        lower
+      );
+
+    const horizontal =
+      distance(
+        left,
+        right
+      );
+
+    mouthRatio =
+      vertical /
+      horizontal;
+  }
+
+  const leftEyeRatio = getEyeRatio(
+    face,
+    159,
+    160,
+    145,
+    144,
+    33,
+    133
+  );
+
+  const rightEyeRatio = getEyeRatio(
+    face,
+    386,
+    385,
+    374,
+    380,
+    362,
+    263
+  );
+
+  const mouthOpen =
+    mouthRatio > 0.22;
+
+  const leftEyeOpen =
+    leftEyeRatio > 0.65;
+
+  const rightEyeOpen =
+    rightEyeRatio > 0.65;
+
+  return {
+    mouthRatio,
+    leftEyeRatio,
+    rightEyeRatio,
+    mouthOpen,
+    leftEyeOpen,
+    rightEyeOpen,
+    beamActive:
+      mouthOpen &&
+      leftEyeOpen &&
+      rightEyeOpen,
+  };
+}
+
 function App() {
   const videoRef =
     useRef<HTMLVideoElement>(null);
@@ -1487,8 +1565,11 @@ function App() {
   const [hands, setHands] =
     useState(0);
 
-  const [poseDetected, setPoseDetected] =
-    useState(false);
+  const [bodyCount, setBodyCount] =
+    useState(0);
+
+  const [faceCount, setFaceCount] =
+    useState(0);
 
   const [mouthOpen, setMouthOpen] =
     useState(false);
@@ -1549,6 +1630,13 @@ function App() {
       "ultimate_max_hands",
       String(safeMaxHands)
     );
+
+    if (cameraStarted) {
+      initializeModels(
+        safeMaxPlayers,
+        safeMaxHands
+      );
+    }
   };
 
   const resetBattleState = () => {
@@ -1654,8 +1742,32 @@ function App() {
   // --------------------------------
 
   const initializeModels =
-    async () => {
+    async (
+      playerLimit = maxPlayers,
+      handLimit = maxHands
+    ) => {
       try {
+        setModelReady(false);
+
+        if (animationRef.current) {
+          cancelAnimationFrame(
+            animationRef.current
+          );
+          animationRef.current = null;
+        }
+
+        handLandmarkerRef.current
+          ?.close();
+        poseLandmarkerRef.current
+          ?.close();
+        faceLandmarkerRef.current
+          ?.close();
+
+        handLandmarkerRef.current = null;
+        poseLandmarkerRef.current = null;
+        faceLandmarkerRef.current = null;
+        lastTimeRef.current = -1;
+
         const vision =
           await FilesetResolver.forVisionTasks(
             "/mediapipe"
@@ -1681,7 +1793,7 @@ function App() {
 
               runningMode: "VIDEO",
 
-              numHands: maxHands,
+              numHands: handLimit,
 
               minHandDetectionConfidence: 0.4,
 
@@ -1714,7 +1826,7 @@ function App() {
 
               runningMode: "VIDEO",
 
-              numPoses: maxPlayers,
+              numPoses: playerLimit,
 
               minPoseDetectionConfidence: 0.4,
 
@@ -1747,7 +1859,7 @@ function App() {
 
               runningMode: "VIDEO",
 
-              numFaces: maxPlayers,
+              numFaces: playerLimit,
 
               minFaceDetectionConfidence: 0.4,
 
@@ -2292,8 +2404,12 @@ function App() {
         handResult.landmarks.length
       );
 
-      setPoseDetected(
-        poseResult.landmarks.length > 0
+      setBodyCount(
+        poseResult.landmarks.length
+      );
+
+      setFaceCount(
+        faceResult.faceLandmarks.length
       );
 
       updatePunchFireballs(
@@ -2301,116 +2417,44 @@ function App() {
         now
       );
 
-      let currentMouthOpen = false;
-      let currentLeftEyeOpen = false;
-      let currentRightEyeOpen = false;
-
-      if (
-        faceResult.faceLandmarks.length > 0
-      ) {
-        const face =
-          faceResult.faceLandmarks[0];
-
-        const upper =
-          face[13];
-        const lower =
-          face[14];
-        const left =
-          face[61];
-        const right =
-          face[291];
-
-        if (
-          upper &&
-          lower &&
-          left &&
-          right
-        ) {
-          const vertical =
-            distance(
-              upper,
-              lower
-            );
-
-          const horizontal =
-            distance(
-              left,
-              right
-            );
-
-          const ratio =
-            vertical /
-            horizontal;
-
-          setMouthRatio(ratio);
-
-          const isOpen =
-            ratio > 0.22;
-
-          currentMouthOpen =
-            isOpen;
-
-          setMouthOpen(
-            isOpen
-          );
-        } else {
-          setMouthOpen(false);
-          setMouthRatio(0);
-        }
-      } else {
-        setMouthOpen(false);
-        setMouthRatio(0);
-      }
-
-      if (faceResult.faceLandmarks.length > 0) {
-        const face = faceResult.faceLandmarks[0];
-
-        const leftEye = getEyeRatio(
-          face,
-          159,
-          160,
-          145,
-          144,
-          33,
-          133
+      const faceAttackStates =
+        faceResult.faceLandmarks.map(
+          getFaceAttackState
         );
 
-        const rightEye = getEyeRatio(
-          face,
-          386,
-          385,
-          374,
-          380,
-          362,
-          263
+      const activeFaceIndex =
+        faceAttackStates.findIndex(
+          (state) => state.beamActive
         );
 
-        setLeftEyeRatio(leftEye);
-        setRightEyeRatio(rightEye);
+      const displayFaceState =
+        activeFaceIndex >= 0
+          ? faceAttackStates[
+              activeFaceIndex
+            ]
+          : faceAttackStates[0];
 
-        currentLeftEyeOpen =
-          leftEye > 0.65;
-
-        currentRightEyeOpen =
-          rightEye > 0.65;
-
-        setLeftEyeOpen(
-          currentLeftEyeOpen
-        );
-        setRightEyeOpen(
-          currentRightEyeOpen
-        );
-      } else {
-        setLeftEyeOpen(false);
-        setRightEyeOpen(false);
-        setLeftEyeRatio(0);
-        setRightEyeRatio(0);
-      }
+      setMouthRatio(
+        displayFaceState?.mouthRatio ?? 0
+      );
+      setLeftEyeRatio(
+        displayFaceState?.leftEyeRatio ?? 0
+      );
+      setRightEyeRatio(
+        displayFaceState?.rightEyeRatio ?? 0
+      );
+      setMouthOpen(
+        displayFaceState?.mouthOpen ?? false
+      );
+      setLeftEyeOpen(
+        displayFaceState?.leftEyeOpen ?? false
+      );
+      setRightEyeOpen(
+        displayFaceState?.rightEyeOpen ?? false
+      );
 
       const playerBeamActive =
-        currentMouthOpen &&
-        currentLeftEyeOpen &&
-        currentRightEyeOpen;
+        activeFaceIndex >= 0;
 
       hitEffectsRef.current =
         hitEffectsRef.current
@@ -2420,12 +2464,13 @@ function App() {
           }))
           .filter((effect) => effect.life > 0);
 
-      const face =
-        faceResult.faceLandmarks[0];
-
-      if (playerBeamActive && face) {
+      if (playerBeamActive) {
         const beamInfo =
-          getMouthBeamInfo(face);
+          getMouthBeamInfo(
+            faceResult.faceLandmarks[
+              activeFaceIndex
+            ]
+          );
 
         if (beamInfo) {
           const cpuTarget = {
@@ -2452,6 +2497,13 @@ function App() {
           }
         }
       }
+
+      const face =
+        faceResult.faceLandmarks[
+          activeFaceIndex >= 0
+            ? activeFaceIndex
+            : 0
+        ];
 
       const cpuBeamActive =
         cpuEnabled &&
@@ -2507,7 +2559,9 @@ function App() {
         handResult.landmarks,
         poseResult.landmarks,
         faceResult.faceLandmarks,
-        playerBeamActive,
+        faceAttackStates.map(
+          (state) => state.beamActive
+        ),
         fireballsRef.current,
         now
       );
@@ -2527,7 +2581,7 @@ function App() {
     hands: Point[][],
     poses: Point[][],
     faces: Point[][],
-    mouthBeamActive: boolean,
+    activeFaceBeams: boolean[],
     fireballs: Fireball[],
     time: number
   ) => {
@@ -2782,8 +2836,8 @@ function App() {
     // ----------------------------
 
     faces.forEach(
-      (face) => {
-        if (mouthBeamActive) {
+      (face, faceIndex) => {
+        if (activeFaceBeams[faceIndex]) {
           drawMouthBeam(
             ctx,
             canvas,
@@ -3077,7 +3131,7 @@ function App() {
           </span>
 
           <strong>
-            {hands} / 2
+            {hands} / {maxHands}
           </strong>
         </div>
 
@@ -3087,9 +3141,17 @@ function App() {
           </span>
 
           <strong>
-            {poseDetected
-              ? "DETECTED"
-              : "NOT FOUND"}
+            {bodyCount} / {maxPlayers}
+          </strong>
+        </div>
+
+        <div>
+          <span>
+            FACES
+          </span>
+
+          <strong>
+            {faceCount} / {maxPlayers}
           </strong>
         </div>
 
