@@ -1,130 +1,310 @@
 import { useEffect, useRef, useState } from "react";
-import { createHandpose } from "@svenflow/micro-handpose";
+import {
+  FilesetResolver,
+  HandLandmarker,
+  PoseLandmarker,
+} from "@mediapipe/tasks-vision";
+
 import "./App.css";
 
 type Point = {
   x: number;
   y: number;
-  z?: number;
+  z: number;
+  visibility?: number;
 };
 
-type Hand = {
-  score: number;
-  handedness: "left" | "right";
-  landmarks: Point[];
-  keypoints: Record<string, Point>;
-};
+const FINGER_TIPS = [4, 8, 12, 16, 20];
+
+const POSE_CONNECTIONS = [
+  [11, 12],
+
+  [11, 13],
+  [13, 15],
+
+  [12, 14],
+  [14, 16],
+
+  [11, 23],
+  [12, 24],
+
+  [23, 24],
+
+  [23, 25],
+  [25, 27],
+  [27, 29],
+  [29, 31],
+
+  [24, 26],
+  [26, 28],
+  [28, 30],
+  [30, 32],
+];
 
 function App() {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const detectorRef = useRef<any>(null);
-  const runningRef = useRef(false);
+  const videoRef =
+    useRef<HTMLVideoElement>(null);
 
-  const [started, setStarted] = useState(false);
-  const [status, setStatus] = useState("カメラを起動してください");
-  const [handDetected, setHandDetected] = useState(false);
+  const canvasRef =
+    useRef<HTMLCanvasElement>(null);
 
-  const [indexX, setIndexX] = useState(0);
-  const [indexY, setIndexY] = useState(0);
+  const handLandmarkerRef =
+    useRef<HandLandmarker | null>(null);
+
+  const poseLandmarkerRef =
+    useRef<PoseLandmarker | null>(null);
+
+  const streamRef =
+    useRef<MediaStream | null>(null);
+
+  const animationRef =
+    useRef<number | null>(null);
+
+  const lastTimeRef =
+    useRef(-1);
+
+  const [cameraStarted, setCameraStarted] =
+    useState(false);
+
+  const [modelReady, setModelReady] =
+    useState(false);
+
+  const [hands, setHands] =
+    useState(0);
+
+  const [poseDetected, setPoseDetected] =
+    useState(false);
+
+  const [status, setStatus] =
+    useState("カメラを起動してください");
 
   const startCamera = async () => {
     try {
-      if (!navigator.gpu) {
-        setStatus("WebGPUが使えません。ChromeまたはSafari 18以降を確認してください。");
+      setStatus("カメラを起動中...");
+
+      const stream =
+        await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: "user",
+            width: {
+              ideal: 1280,
+            },
+            height: {
+              ideal: 720,
+            },
+          },
+          audio: false,
+        });
+
+      streamRef.current = stream;
+
+      if (!videoRef.current) {
         return;
       }
 
-      setStatus("手認識モデルを読み込んでいます...");
-
-      const handpose = await createHandpose({
-        maxHands: 2,
-        scoreThreshold: 0.4,
-      });
-
-      detectorRef.current = handpose;
-
-      setStatus("カメラを起動しています...");
-
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: "user",
-          width: 1280,
-          height: 720,
-        },
-        audio: false,
-      });
-
-      if (!videoRef.current) return;
-
-      videoRef.current.srcObject = stream;
+      videoRef.current.srcObject =
+        stream;
 
       await videoRef.current.play();
 
-      setStarted(true);
-      setStatus("手をカメラに見せてください");
+      setCameraStarted(true);
 
-      runningRef.current = true;
+      setStatus(
+        "カメラ起動完了。認識モデルを読み込み中..."
+      );
 
-      detect();
+      initializeModels();
+
     } catch (error) {
       console.error(error);
-      setStatus("起動エラー。Consoleを確認してください。");
+
+      setStatus(
+        "カメラを起動できませんでした"
+      );
     }
   };
 
-  const detect = async () => {
+  const initializeModels =
+    async () => {
+      try {
+        const vision =
+          await FilesetResolver.forVisionTasks(
+            "/mediapipe"
+          );
+
+        setStatus(
+          "手・指の認識モデルを読み込み中..."
+        );
+
+        const handLandmarker =
+          await HandLandmarker.createFromOptions(
+            vision,
+            {
+              baseOptions: {
+                modelAssetPath:
+                  "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+
+                delegate: "GPU",
+              },
+
+              runningMode: "VIDEO",
+
+              numHands: 2,
+
+              minHandDetectionConfidence: 0.4,
+
+              minHandPresenceConfidence: 0.4,
+
+              minTrackingConfidence: 0.4,
+            }
+          );
+
+        handLandmarkerRef.current =
+          handLandmarker;
+
+        setStatus(
+          "全身認識モデルを読み込み中..."
+        );
+
+        const poseLandmarker =
+          await PoseLandmarker.createFromOptions(
+            vision,
+            {
+              baseOptions: {
+                modelAssetPath:
+                  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+
+                delegate: "GPU",
+              },
+
+              runningMode: "VIDEO",
+
+              numPoses: 1,
+
+              minPoseDetectionConfidence: 0.4,
+
+              minPosePresenceConfidence: 0.4,
+
+              minTrackingConfidence: 0.4,
+            }
+          );
+
+        poseLandmarkerRef.current =
+          poseLandmarker;
+
+        setModelReady(true);
+
+        setStatus(
+          "全身認識開始！"
+        );
+
+        startDetection();
+
+      } catch (error) {
+        console.error(error);
+
+        setStatus(
+          "MediaPipeの読み込みに失敗しました"
+        );
+      }
+    };
+
+  const startDetection = () => {
+    animationRef.current =
+      requestAnimationFrame(
+        detect
+      );
+  };
+
+  const detect = () => {
+    const video =
+      videoRef.current;
+
+    const handLandmarker =
+      handLandmarkerRef.current;
+
+    const poseLandmarker =
+      poseLandmarkerRef.current;
+
     if (
-      !runningRef.current ||
-      !videoRef.current ||
-      !detectorRef.current
+      !video ||
+      !handLandmarker ||
+      !poseLandmarker
     ) {
       return;
     }
 
-    try {
-      const hands: Hand[] =
-        await detectorRef.current.detect(videoRef.current);
+    if (
+      video.readyState >= 2 &&
+      video.currentTime !==
+        lastTimeRef.current
+    ) {
+      lastTimeRef.current =
+        video.currentTime;
 
-      draw(hands);
+      const now =
+        performance.now();
 
-      if (hands.length > 0) {
-        const hand = hands[0];
-
-        setHandDetected(true);
-        setStatus(
-          `${hand.handedness} hand detected`
+      // 手
+      const handResult =
+        handLandmarker.detectForVideo(
+          video,
+          now
         );
 
-        const indexTip = hand.keypoints.index_tip;
+      // 全身
+      const poseResult =
+        poseLandmarker.detectForVideo(
+          video,
+          now
+        );
 
-        if (indexTip) {
-          setIndexX(indexTip.x);
-          setIndexY(indexTip.y);
-        }
-      } else {
-        setHandDetected(false);
-        setStatus("手をカメラに見せてください");
-      }
-    } catch (error) {
-      console.error(error);
+      setHands(
+        handResult.landmarks.length
+      );
+
+      setPoseDetected(
+        poseResult.landmarks.length > 0
+      );
+
+      draw(
+        handResult.landmarks,
+        poseResult.landmarks
+      );
     }
 
-    requestAnimationFrame(detect);
+    animationRef.current =
+      requestAnimationFrame(
+        detect
+      );
   };
 
-  const draw = (hands: Hand[]) => {
-    const canvas = canvasRef.current;
-    const video = videoRef.current;
+  const draw = (
+    hands: Point[][],
+    poses: Point[][]
+  ) => {
+    const canvas =
+      canvasRef.current;
 
-    if (!canvas || !video) return;
+    const video =
+      videoRef.current;
 
-    const ctx = canvas.getContext("2d");
+    if (!canvas || !video) {
+      return;
+    }
 
-    if (!ctx) return;
+    const ctx =
+      canvas.getContext("2d");
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    if (!ctx) {
+      return;
+    }
+
+    canvas.width =
+      video.videoWidth;
+
+    canvas.height =
+      video.videoHeight;
 
     ctx.clearRect(
       0,
@@ -133,115 +313,262 @@ function App() {
       canvas.height
     );
 
-    for (const hand of hands) {
-      const points = hand.landmarks;
+    // ---------------------
+    // 全身
+    // ---------------------
 
-      const connections = [
-        [0, 1],
-        [1, 2],
-        [2, 3],
-        [3, 4],
+    poses.forEach(
+      (pose) => {
+        ctx.strokeStyle =
+          "#00aaff";
 
-        [0, 5],
-        [5, 6],
-        [6, 7],
-        [7, 8],
+        ctx.fillStyle =
+          "#00aaff";
 
-        [0, 9],
-        [9, 10],
-        [10, 11],
-        [11, 12],
+        ctx.lineWidth = 5;
 
-        [0, 13],
-        [13, 14],
-        [14, 15],
-        [15, 16],
+        for (
+          const [a, b]
+          of POSE_CONNECTIONS
+        ) {
+          const p1 =
+            pose[a];
 
-        [0, 17],
-        [17, 18],
-        [18, 19],
-        [19, 20],
+          const p2 =
+            pose[b];
 
-        [5, 9],
-        [9, 13],
-        [13, 17],
-      ];
+          if (!p1 || !p2) {
+            continue;
+          }
 
-      ctx.strokeStyle = "#00ff88";
-      ctx.lineWidth = 4;
+          if (
+            p1.visibility !== undefined &&
+            p1.visibility < 0.3
+          ) {
+            continue;
+          }
 
-      for (const [a, b] of connections) {
-        const p1 = points[a];
-        const p2 = points[b];
+          if (
+            p2.visibility !== undefined &&
+            p2.visibility < 0.3
+          ) {
+            continue;
+          }
 
-        ctx.beginPath();
+          ctx.beginPath();
 
-        ctx.moveTo(
-          p1.x * canvas.width,
-          p1.y * canvas.height
+          ctx.moveTo(
+            p1.x *
+              canvas.width,
+            p1.y *
+              canvas.height
+          );
+
+          ctx.lineTo(
+            p2.x *
+              canvas.width,
+            p2.y *
+              canvas.height
+          );
+
+          ctx.stroke();
+        }
+
+        pose.forEach(
+          (point, index) => {
+            if (
+              point.visibility !== undefined &&
+              point.visibility < 0.3
+            ) {
+              return;
+            }
+
+            ctx.beginPath();
+
+            ctx.arc(
+              point.x *
+                canvas.width,
+
+              point.y *
+                canvas.height,
+
+              7,
+
+              0,
+              Math.PI * 2
+            );
+
+            ctx.fill();
+          }
         );
-
-        ctx.lineTo(
-          p2.x * canvas.width,
-          p2.y * canvas.height
-        );
-
-        ctx.stroke();
       }
+    );
 
-      ctx.fillStyle = "#ffffff";
+    // ---------------------
+    // 手＋指
+    // ---------------------
 
-      for (const point of points) {
-        ctx.beginPath();
+    const HAND_CONNECTIONS = [
+      [0, 1],
+      [1, 2],
+      [2, 3],
+      [3, 4],
 
-        ctx.arc(
-          point.x * canvas.width,
-          point.y * canvas.height,
-          7,
-          0,
-          Math.PI * 2
+      [0, 5],
+      [5, 6],
+      [6, 7],
+      [7, 8],
+
+      [0, 9],
+      [9, 10],
+      [10, 11],
+      [11, 12],
+
+      [0, 13],
+      [13, 14],
+      [14, 15],
+      [15, 16],
+
+      [0, 17],
+      [17, 18],
+      [18, 19],
+      [19, 20],
+
+      [5, 9],
+      [9, 13],
+      [13, 17],
+    ];
+
+    hands.forEach(
+      (hand, handIndex) => {
+        const color =
+          handIndex === 0
+            ? "#00ff88"
+            : "#ff00ff";
+
+        ctx.strokeStyle =
+          color;
+
+        ctx.fillStyle =
+          color;
+
+        ctx.lineWidth = 4;
+
+        for (
+          const [a, b]
+          of HAND_CONNECTIONS
+        ) {
+          const p1 =
+            hand[a];
+
+          const p2 =
+            hand[b];
+
+          ctx.beginPath();
+
+          ctx.moveTo(
+            p1.x *
+              canvas.width,
+            p1.y *
+              canvas.height
+          );
+
+          ctx.lineTo(
+            p2.x *
+              canvas.width,
+            p2.y *
+              canvas.height
+          );
+
+          ctx.stroke();
+        }
+
+        hand.forEach(
+          (point, index) => {
+            const isTip =
+              FINGER_TIPS.includes(
+                index
+              );
+
+            ctx.beginPath();
+
+            ctx.arc(
+              point.x *
+                canvas.width,
+
+              point.y *
+                canvas.height,
+
+              isTip ? 12 : 5,
+
+              0,
+              Math.PI * 2
+            );
+
+            ctx.fill();
+          }
         );
-
-        ctx.fill();
       }
-    }
+    );
   };
 
   useEffect(() => {
     return () => {
-      runningRef.current = false;
-
-      if (videoRef.current?.srcObject) {
-        const stream =
-          videoRef.current.srcObject as MediaStream;
-
-        stream.getTracks().forEach((track) => {
-          track.stop();
-        });
+      if (
+        animationRef.current
+      ) {
+        cancelAnimationFrame(
+          animationRef.current
+        );
       }
 
-      detectorRef.current?.dispose();
+      streamRef.current
+        ?.getTracks()
+        .forEach(
+          (track) =>
+            track.stop()
+        );
+
+      handLandmarkerRef.current
+        ?.close();
+
+      poseLandmarkerRef.current
+        ?.close();
     };
   }, []);
 
   return (
     <div className="app">
 
-      <h1>必殺技ジェネレーター</h1>
+      <h1>
+        必殺技ジェネレーター
+      </h1>
 
       <p className="subtitle">
-        HAND TRACKING TEST
+        ULTIMATE ATTACK SYSTEM
       </p>
 
       <div className="camera">
 
-        {!started && (
+        {!cameraStarted && (
           <div className="start">
-            <h2>手を構えろ</h2>
 
-            <button onClick={startCamera}>
+            <h2>
+              全身を構えろ
+            </h2>
+
+            <p>
+              手・指・腕・脚まで認識
+            </p>
+
+            <button
+              onClick={
+                startCamera
+              }
+            >
               カメラを起動
             </button>
+
           </div>
         )}
 
@@ -252,7 +579,9 @@ function App() {
           muted
         />
 
-        <canvas ref={canvasRef} />
+        <canvas
+          ref={canvasRef}
+        />
 
         <div className="status">
           {status}
@@ -260,34 +589,55 @@ function App() {
 
       </div>
 
-      <div className="data">
+      <div className="info">
 
-        <div className="card">
-          <span>HAND</span>
+        <div>
+          <span>
+            HANDS
+          </span>
+
           <strong>
-            {handDetected ? "DETECTED" : "NOT FOUND"}
+            {hands} / 2
           </strong>
         </div>
 
-        <div className="card">
-          <span>INDEX TIP X</span>
+        <div>
+          <span>
+            FULL BODY
+          </span>
+
           <strong>
-            {indexX.toFixed(3)}
+            {poseDetected
+              ? "DETECTED"
+              : "NOT FOUND"}
           </strong>
         </div>
 
-        <div className="card">
-          <span>INDEX TIP Y</span>
+        <div>
+          <span>
+            SYSTEM
+          </span>
+
           <strong>
-            {indexY.toFixed(3)}
+            {modelReady
+              ? "READY"
+              : "LOADING"}
           </strong>
         </div>
 
       </div>
 
-      <p className="instruction">
-        人差し指を動かしてください
-      </p>
+      <div className="instruction">
+
+        手だけじゃない。
+
+        <br />
+
+        <strong>
+          全身で必殺技を放て。
+        </strong>
+
+      </div>
 
     </div>
   );

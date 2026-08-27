@@ -22,76 +22,100 @@ h1 {
 }
 
 .subtitle {
-  color: #666;
+  color: #777;
   letter-spacing: 5px;
-  margin-bottom: 40px;
+  margin-bottom: 35px;
 }
 
 .camera {
   position: relative;
-  width: min(1000px, 100%);
+
+  width: min(1100px, 100%);
+
   aspect-ratio: 16 / 9;
+
   margin: auto;
+
   overflow: hidden;
+
   border-radius: 20px;
+
   background: #111;
+
   border: 1px solid #333;
 }
 
 video {
   width: 100%;
   height: 100%;
+
   object-fit: cover;
+
   transform: scaleX(-1);
 }
 
 canvas {
   position: absolute;
+
   inset: 0;
+
   width: 100%;
   height: 100%;
+
   transform: scaleX(-1);
+
   pointer-events: none;
 }
 
 .start {
   position: absolute;
+
   inset: 0;
+
   z-index: 10;
 
   display: flex;
+
   flex-direction: column;
+
   justify-content: center;
+
   align-items: center;
 
   background: #050505;
 }
 
 .start h2 {
-  font-size: 36px;
-  letter-spacing: 5px;
+  font-size: 38px;
+
+  letter-spacing: 6px;
+}
+
+.start p {
+  color: #777;
 }
 
 button {
   border: 0;
+
   border-radius: 999px;
-  padding: 16px 40px;
+
+  padding: 16px 42px;
 
   background: white;
+
   color: black;
 
   font-size: 18px;
+
   font-weight: bold;
 
   cursor: pointer;
 }
 
-button:hover {
-  transform: scale(1.05);
-}
-
 .status {
   position: absolute;
+
   top: 20px;
   left: 20px;
 
@@ -104,34 +128,40 @@ button:hover {
   font-size: 14px;
 }
 
-.data {
-  width: min(1000px, 100%);
-  margin: 30px auto;
+.info {
+  width: min(900px, 100%);
+
+  margin: 25px auto;
 
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+
+  grid-template-columns:
+    1fr 1fr 1fr;
+
   gap: 15px;
 }
 
-.card {
+.info div {
   padding: 20px;
 
-  border: 1px solid #333;
-  border-radius: 15px;
-
   background: #0d0d0d;
+
+  border: 1px solid #333;
+
+  border-radius: 15px;
 }
 
-.card span {
+.info span {
   display: block;
 
   color: #666;
 
   font-size: 12px;
-  letter-spacing: 2px;
+
+  letter-spacing: 3px;
 }
 
-.card strong {
+.info strong {
   display: block;
 
   margin-top: 10px;
@@ -140,7 +170,21 @@ button:hover {
 }
 
 .instruction {
-  color: #888;
+  margin-top: 40px;
+
+  color: #777;
+
+  font-size: 20px;
+
+  line-height: 1.8;
+}
+
+.instruction strong {
+  color: white;
+
+  font-size: 30px;
+
+  letter-spacing: 4px;
 }
 
 @media (max-width: 700px) {
@@ -148,7 +192,7 @@ button:hover {
     font-size: 30px;
   }
 
-  .data {
+  .info {
     grid-template-columns: 1fr;
   }
 }
