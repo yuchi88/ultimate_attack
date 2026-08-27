@@ -1316,8 +1316,11 @@ function App() {
   const [hands, setHands] =
     useState(0);
 
-  const [poseDetected, setPoseDetected] =
-    useState(false);
+  const [faceCount, setFaceCount] =
+    useState(0);
+
+  const [poseCount, setPoseCount] =
+    useState(0);
 
   const [mouthOpen, setMouthOpen] =
     useState(false);
@@ -1398,6 +1401,20 @@ function App() {
   const initializeModels =
     async () => {
       try {
+        const maxPlayers =
+          Number(
+            localStorage.getItem(
+              "maxPlayers"
+            )
+          ) || 4;
+
+        const maxHands =
+          Number(
+            localStorage.getItem(
+              "maxHands"
+            )
+          ) || 8;
+
         const vision =
           await FilesetResolver.forVisionTasks(
             "/mediapipe"
@@ -1423,13 +1440,13 @@ function App() {
 
               runningMode: "VIDEO",
 
-              numHands: 2,
+              numHands: maxHands,
 
-              minHandDetectionConfidence: 0.4,
+              minHandDetectionConfidence: 0.25,
 
-              minHandPresenceConfidence: 0.4,
+              minHandPresenceConfidence: 0.25,
 
-              minTrackingConfidence: 0.4,
+              minTrackingConfidence: 0.25,
             }
           );
 
@@ -1456,7 +1473,7 @@ function App() {
 
               runningMode: "VIDEO",
 
-              numPoses: 1,
+              numPoses: maxPlayers,
 
               minPoseDetectionConfidence: 0.4,
 
@@ -1489,7 +1506,7 @@ function App() {
 
               runningMode: "VIDEO",
 
-              numFaces: 1,
+              numFaces: maxPlayers,
 
               minFaceDetectionConfidence: 0.4,
 
@@ -1941,9 +1958,27 @@ function App() {
         handResult.landmarks.length
       );
 
-      setPoseDetected(
-        poseResult.landmarks.length > 0
+        console.log(
+          "手の詳細:",
+          handResult.handednesses
+        );
+
+      setPoseCount(
+        poseResult.landmarks.length
       );
+
+        setFaceCount(
+          faceResult.faceLandmarks.length
+        );
+
+        console.log(
+          "認識人数:",
+          poseResult.landmarks.length,
+          "顔:",
+          faceResult.faceLandmarks.length,
+          "手:",
+          handResult.landmarks.length
+        );
 
       updatePunchFireballs(
         handResult.landmarks,
@@ -2493,7 +2528,7 @@ function App() {
           </span>
 
           <strong>
-            {hands} / 2
+            {hands} / 8
           </strong>
         </div>
 
@@ -2503,9 +2538,17 @@ function App() {
           </span>
 
           <strong>
-            {poseDetected
-              ? "DETECTED"
-              : "NOT FOUND"}
+            {poseCount} / 4
+          </strong>
+        </div>
+
+        <div>
+          <span>
+            FACE
+          </span>
+
+          <strong>
+            {faceCount} / 4
           </strong>
         </div>
 
