@@ -8,6 +8,7 @@ import {
 
 
 import "./App.css";
+import Settings from "./pages/setting/setting";
 
 type Point = {
   x: number;
@@ -29,6 +30,9 @@ type Fireball = {
   radius: number;
   life: number;
   maxLife: number;
+  attribute: string;
+  owner: "player" | "cpu";
+  target: "cpu" | "player";
 };
 
 type PunchHandState = {
@@ -39,6 +43,16 @@ type PunchHandState = {
   charge: number;
   cooldown: number;
   ready: boolean;
+};
+
+type HitEffect = {
+  x: number;
+  y: number;
+  life: number;
+  maxLife: number;
+  radius: number;
+  color: string;
+  damage: number;
 };
 
 const FINGER_TIPS = [4, 8, 12, 16, 20];
@@ -1307,6 +1321,19 @@ function App() {
   const fireballsRef =
     useRef<Fireball[]>([]);
 
+  const hitEffectsRef =
+    useRef<HitEffect[]>([]);
+
+  // --------------------------------
+  // 見た目属性の安定判定
+  // --------------------------------
+
+  const visualAttributeHistoryRef =
+    useRef<string[][]>([]);
+
+  const [showSettings, setShowSettings] =
+    useState(false);
+
   const [cameraStarted, setCameraStarted] =
     useState(false);
 
@@ -1339,6 +1366,653 @@ function App() {
 
   const [status, setStatus] =
     useState("カメラを起動してください");
+
+  // --------------------------------
+  // プレイヤー属性
+  // --------------------------------
+
+  const [playerAttributes, setPlayerAttributes] =
+    useState<string[]>([
+      "none",
+      "none",
+      "none",
+      "none",
+    ]);
+
+  const MAX_PLAYERS = 4;
+  const MAX_HANDS = MAX_PLAYERS * 2;
+
+  const [playerHP, setPlayerHP] =
+    useState<number[]>(() =>
+      Array.from(
+        { length: MAX_PLAYERS },
+        () => 100
+      )
+    );
+
+  const [cpuHP, setCpuHP] =
+    useState<number>(100);
+
+  const [battleWinner, setBattleWinner] =
+    useState<"PLAYER" | "CPU" | null>(null);
+
+  const cpuAttackTimerRef =
+    useRef<number>(0);
+
+  useEffect(() => {
+    setPlayerHP(
+      Array.from(
+        { length: MAX_PLAYERS },
+        () => 100
+      )
+    );
+    setCpuHP(100);
+    setBattleWinner(null);
+  }, [MAX_PLAYERS]);
+
+  const ATTRIBUTE_STYLES: Record<
+    string,
+    { label: string; color: string; soft: string }
+  > = {
+    fire: {
+      label: "炎",
+      color: "#ff5a36",
+      soft: "rgba(255, 90, 54, 0.24)",
+    },
+    thunder: {
+      label: "雷",
+      color: "#f6d74b",
+      soft: "rgba(246, 215, 75, 0.24)",
+    },
+    ice: {
+      label: "氷",
+      color: "#6ec8ff",
+      soft: "rgba(110, 200, 255, 0.24)",
+    },
+    wind: {
+      label: "風",
+      color: "#7ee7a7",
+      soft: "rgba(126, 231, 167, 0.24)",
+    },
+    god: {
+      label: "神",
+      color: "#ffcf5a",
+      soft: "rgba(255, 207, 90, 0.24)",
+    },
+    none: {
+      label: "未判定",
+      color: "#9aa0a6",
+      soft: "rgba(154, 160, 166, 0.22)",
+    },
+  };
+
+  const getPlayerHealthRatio = (
+    index: number
+  ) => {
+    const hp = playerHP[index] ?? 100;
+    const maxHp = 100;
+    return Math.max(
+      0,
+      Math.min(1, hp / maxHp)
+    );
+  };
+
+  const visiblePlayerEntries =
+    playerAttributes
+      .map((attribute, index) => ({
+        index,
+        attribute,
+      }))
+      .filter(
+        ({ attribute }) =>
+          attribute !== "none"
+      );
+
+  const getAttributeColor = (
+    attribute: string
+  ) => {
+    return (
+      ATTRIBUTE_STYLES[
+        attribute
+      ]?.color ?? "#9aa0a6"
+    );
+  };
+
+  const spawnHitEffect = (
+    x: number,
+    y: number,
+    color: string,
+    damage: number
+  ) => {
+    hitEffectsRef.current = [
+      ...hitEffectsRef.current,
+      {
+        x,
+        y,
+        life: 900,
+        maxLife: 900,
+        radius: 0.06,
+        color,
+        damage,
+      },
+    ].slice(-18);
+  };
+
+  const getWinnerFromHpState = (
+    cpuValue: number,
+    playerValues: number[]
+  ) => {
+    const playerStillAlive =
+      playerValues.some(
+        (hp) => hp > 0
+      );
+
+    if (cpuValue <= 0 && playerStillAlive) {
+      return "PLAYER";
+    }
+
+    if (cpuValue > 0 && !playerStillAlive) {
+      return "CPU";
+    }
+
+    return null;
+  };
+
+  const applyBattleDamage = (
+    target: "cpu" | "player",
+    amount: number,
+    hitX?: number,
+    hitY?: number,
+    hitColor?: string
+  ) => {
+    if (battleWinner) {
+      return;
+    }
+
+    if (target === "cpu") {
+      setCpuHP((current) => {
+        const next = Math.max(
+          0,
+          current - amount
+        );
+
+        if (hitX !== undefined && hitY !== undefined) {
+          spawnHitEffect(
+            hitX,
+            hitY,
+            hitColor ?? "#ff7a59",
+            amount
+          );
+        }
+
+        const winner = getWinnerFromHpState(
+          next,
+          playerHP
+        );
+
+        if (winner) {
+          setBattleWinner(winner);
+        }
+
+        return next;
+      });
+      return;
+    }
+
+    setPlayerHP((current) => {
+      const next = [...current];
+      const playerIndex = 0;
+      next[playerIndex] = Math.max(
+        0,
+        (next[playerIndex] ?? 100) - amount
+      );
+
+      if (hitX !== undefined && hitY !== undefined) {
+        spawnHitEffect(
+          hitX,
+          hitY,
+          hitColor ?? "#ff7a59",
+          amount
+        );
+      }
+
+      const winner = getWinnerFromHpState(
+        cpuHP,
+        next
+      );
+
+      if (winner) {
+        setBattleWinner(winner);
+      }
+
+      return next;
+    });
+  };
+
+  const normalizeHandSides = (
+    landmarks: Point[][],
+    handednesses: Array<
+      Array<{ categoryName?: string }>
+    >
+  ) => {
+    const leftHands: Point[][] = [];
+    const rightHands: Point[][] = [];
+
+    landmarks.forEach((hand, index) => {
+      const side =
+        handednesses[index]?.[0]?.categoryName;
+
+      if (side === "Left") {
+        leftHands.push(hand);
+      }
+
+      if (side === "Right") {
+        rightHands.push(hand);
+      }
+    });
+
+    const targetCount = Math.min(
+      leftHands.length,
+      rightHands.length
+    );
+
+    const normalizedLeft = leftHands.slice(
+      0,
+      targetCount
+    );
+    const normalizedRight = rightHands.slice(
+      0,
+      targetCount
+    );
+
+    return {
+      leftHands: normalizedLeft,
+      rightHands: normalizedRight,
+      balancedHands: [
+        ...normalizedLeft,
+        ...normalizedRight,
+      ],
+      leftCount: normalizedLeft.length,
+      rightCount: normalizedRight.length,
+    };
+  };
+
+  const isBalancedHandCount = (
+    totalHands: number,
+    handednesses: Array<Array<{ categoryName?: string }>>
+  ) => {
+    if (totalHands === 0) {
+      return true;
+    }
+
+    const leftCount = handednesses.filter(
+      (hand) =>
+        hand[0]?.categoryName === "Left"
+    ).length;
+
+    const rightCount = handednesses.filter(
+      (hand) =>
+        hand[0]?.categoryName === "Right"
+    ).length;
+
+    return leftCount === rightCount;
+  };
+
+  // --------------------------------
+  // 見た目属性判定
+  // --------------------------------
+
+  const detectVisualAttribute = (
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    width: number,
+    height: number
+  ): string => {
+    const clamp = (
+      value: number,
+      min: number,
+      max: number
+    ) =>
+      Math.max(
+        min,
+        Math.min(value, max)
+      );
+
+    const startX = clamp(
+      Math.floor(x),
+      0,
+      Math.max(0, ctx.canvas.width - 1)
+    );
+
+    const startY = clamp(
+      Math.floor(y),
+      0,
+      Math.max(0, ctx.canvas.height - 1)
+    );
+
+    const endX = clamp(
+      Math.ceil(x + width),
+      startX + 1,
+      ctx.canvas.width
+    );
+
+    const endY = clamp(
+      Math.ceil(y + height),
+      startY + 1,
+      ctx.canvas.height
+    );
+
+    const sampleWidth =
+      endX - startX;
+
+    const sampleHeight =
+      endY - startY;
+
+    if (
+      sampleWidth <= 0 ||
+      sampleHeight <= 0
+    ) {
+      return "none";
+    }
+
+    const imageData =
+      ctx.getImageData(
+        startX,
+        startY,
+        sampleWidth,
+        sampleHeight
+      );
+
+    const pixels =
+      imageData.data;
+
+    let pink = 0;
+    let red = 0;
+    let blue = 0;
+    let green = 0;
+    let white = 0;
+
+    let total = 0;
+
+    for (
+      let i = 0;
+      i < pixels.length;
+      i += 4
+    ) {
+      const r = pixels[i];
+      const g = pixels[i + 1];
+      const b = pixels[i + 2];
+
+      const max =
+        Math.max(r, g, b);
+
+      if (max < 45) {
+        continue;
+      }
+
+      total++;
+
+      // 👑 ピンク・マゼンタ
+      if (
+        r > 145 &&
+        r > g * 1.12 &&
+        b > g * 1.02 &&
+        r - b < 120
+      ) {
+        pink++;
+      }
+
+      // 🔥 赤・オレンジ
+      if (
+        r > 145 &&
+        r > g * 1.25 &&
+        r > b * 1.15
+      ) {
+        red++;
+      }
+
+      // ⚡ 青・紫
+      if (
+        b > 115 &&
+        b > r * 1.12 &&
+        b > g * 1.03
+      ) {
+        blue++;
+      }
+
+      // 🌪️ 緑
+      if (
+        g > 95 &&
+        g > r * 1.18 &&
+        g > b * 1.08
+      ) {
+        green++;
+      }
+
+      // ❄️ 白
+      if (
+        r > 175 &&
+        g > 175 &&
+        b > 175
+      ) {
+        white++;
+      }
+    }
+
+    if (total === 0) {
+      return "none";
+    }
+
+    const pinkScore =
+      pink / total;
+
+    const redScore =
+      red / total;
+
+    const blueScore =
+      blue / total;
+
+    const greenScore =
+      green / total;
+
+    const whiteScore =
+      white / total;
+
+    // =================================
+    // ピンク髪 = 最強の神属性
+    // =================================
+
+    if (pinkScore >= 0.06) {
+      return "god";
+    }
+
+    // =================================
+    // 通常属性
+    // =================================
+
+    const scores: Record<
+      string,
+      number
+    > = {
+      fire: redScore,
+      thunder: blueScore,
+      ice: whiteScore,
+      wind: greenScore,
+    };
+
+    let bestAttribute = "none";
+    let bestScore = 0;
+
+    Object.entries(scores).forEach(
+      ([attribute, score]) => {
+        if (score > bestScore) {
+          bestScore = score;
+          bestAttribute = attribute;
+        }
+      }
+    );
+
+    if (bestScore < 0.05) {
+      return "none";
+    }
+
+    return bestAttribute;
+  };
+
+  // --------------------------------
+  // 服・アクセサリーなどの色から属性判定
+  // --------------------------------
+
+  const detectClothingAttribute = (
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    width: number,
+    height: number
+  ): string => {
+    const clamp = (
+      value: number,
+      min: number,
+      max: number
+    ) =>
+      Math.max(
+        min,
+        Math.min(value, max)
+      );
+
+    const startX = clamp(
+      Math.floor(x),
+      0,
+      Math.max(0, ctx.canvas.width - 1)
+    );
+
+    const startY = clamp(
+      Math.floor(y),
+      0,
+      Math.max(0, ctx.canvas.height - 1)
+    );
+
+    const endX = clamp(
+      Math.ceil(x + width),
+      startX + 1,
+      ctx.canvas.width
+    );
+
+    const endY = clamp(
+      Math.ceil(y + height),
+      startY + 1,
+      ctx.canvas.height
+    );
+
+    const sampleWidth =
+      endX - startX;
+
+    const sampleHeight =
+      endY - startY;
+
+    if (
+      sampleWidth <= 0 ||
+      sampleHeight <= 0
+    ) {
+      return "none";
+    }
+
+    const imageData =
+      ctx.getImageData(
+        startX,
+        startY,
+        sampleWidth,
+        sampleHeight
+      );
+
+    const pixels =
+      imageData.data;
+
+    let red = 0;
+    let blue = 0;
+    let green = 0;
+    let white = 0;
+    let total = 0;
+
+    for (
+      let i = 0;
+      i < pixels.length;
+      i += 4
+    ) {
+      const r = pixels[i];
+      const g = pixels[i + 1];
+      const b = pixels[i + 2];
+
+      const max =
+        Math.max(r, g, b);
+
+      if (max < 50) {
+        continue;
+      }
+
+      total++;
+
+      if (
+        r > 145 &&
+        r > g * 1.25 &&
+        r > b * 1.15
+      ) {
+        red++;
+      }
+
+      if (
+        b > 115 &&
+        b > r * 1.12 &&
+        b > g * 1.03
+      ) {
+        blue++;
+      }
+
+      if (
+        g > 95 &&
+        g > r * 1.18 &&
+        g > b * 1.08
+      ) {
+        green++;
+      }
+
+      if (
+        r > 175 &&
+        g > 175 &&
+        b > 175
+      ) {
+        white++;
+      }
+    }
+
+    if (total === 0) {
+      return "none";
+    }
+
+    const scores: Record<string, number> = {
+      fire: red / total,
+      thunder: blue / total,
+      ice: white / total,
+      wind: green / total,
+    };
+
+    let bestAttribute = "none";
+    let bestScore = 0;
+
+    Object.entries(scores).forEach(
+      ([attribute, score]) => {
+        if (score > bestScore) {
+          bestScore = score;
+          bestAttribute = attribute;
+        }
+      }
+    );
+
+    return bestScore >= 0.08
+      ? bestAttribute
+      : "none";
+  };
 
   // --------------------------------
   // カメラ
@@ -1423,7 +2097,7 @@ function App() {
 
               runningMode: "VIDEO",
 
-              numHands: 2,
+              numHands: MAX_HANDS,
 
               minHandDetectionConfidence: 0.4,
 
@@ -1456,7 +2130,7 @@ function App() {
 
               runningMode: "VIDEO",
 
-              numPoses: 1,
+              numPoses: MAX_PLAYERS,
 
               minPoseDetectionConfidence: 0.4,
 
@@ -1489,7 +2163,7 @@ function App() {
 
               runningMode: "VIDEO",
 
-              numFaces: 1,
+              numFaces: MAX_PLAYERS,
 
               minFaceDetectionConfidence: 0.4,
 
@@ -1530,6 +2204,40 @@ function App() {
       requestAnimationFrame(
         detect
       );
+  };
+
+  const spawnCpuAttack = (time: number) => {
+    if (battleWinner) {
+      return;
+    }
+
+    if (time - cpuAttackTimerRef.current < 2200) {
+      return;
+    }
+
+    cpuAttackTimerRef.current = time;
+
+    const enemyAttribute =
+      playerAttributes[3] &&
+      playerAttributes[3] !== "none"
+        ? playerAttributes[3]
+        : "fire";
+
+    fireballsRef.current = [
+      ...fireballsRef.current,
+      {
+        x: 0.88,
+        y: 0.28 + Math.random() * 0.46,
+        vx: -0.0031,
+        vy: (Math.random() - 0.5) * 0.0014,
+        radius: 0.05,
+        life: 2200,
+        maxLife: 2200,
+        attribute: enemyAttribute,
+        owner: "cpu" as const,
+        target: "player" as const,
+      },
+    ].slice(-12);
   };
 
   const updatePunchFireballs = (
@@ -1652,6 +2360,75 @@ function App() {
             fireball.y > -0.35 &&
             fireball.y < 1.35
         );
+
+    fireballsRef.current.forEach(
+      (fireball) => {
+        if (
+          fireball.owner === "player" &&
+          fireball.target === "cpu" &&
+          fireball.x > 0.7 &&
+          fireball.y > 0.18 &&
+          fireball.y < 0.82
+        ) {
+          const damage =
+            fireball.attribute === "god"
+              ? 22
+              : fireball.attribute === "fire"
+                ? 16
+                : fireball.attribute === "thunder"
+                  ? 14
+                  : fireball.attribute === "ice"
+                    ? 15
+                    : 12;
+
+          applyBattleDamage(
+            "cpu",
+            damage,
+            0.82,
+            fireball.y,
+            getAttributeColor(
+              fireball.attribute
+            )
+          );
+          fireball.life = 0;
+        }
+
+        if (
+          fireball.owner === "cpu" &&
+          fireball.target === "player" &&
+          fireball.x < 0.3 &&
+          fireball.y > 0.18 &&
+          fireball.y < 0.82
+        ) {
+          const damage =
+            fireball.attribute === "god"
+              ? 18
+              : fireball.attribute === "fire"
+                ? 14
+                : fireball.attribute === "thunder"
+                  ? 13
+                  : fireball.attribute === "ice"
+                    ? 12
+                    : 10;
+
+          applyBattleDamage(
+            "player",
+            damage,
+            0.18,
+            fireball.y,
+            getAttributeColor(
+              fireball.attribute
+            )
+          );
+          fireball.life = 0;
+        }
+      }
+    );
+
+    fireballsRef.current =
+      fireballsRef.current.filter(
+        (fireball) => fireball.life > 0
+      );
 
     trackedHands
       .forEach(
@@ -1841,6 +2618,13 @@ function App() {
                 )
               );
 
+            const playerAttribute =
+              playerAttributes[handIndex] &&
+              playerAttributes[handIndex] !==
+                "none"
+                ? playerAttributes[handIndex]
+                : "fire";
+
             fireballsRef.current = [
               ...fireballsRef.current,
               {
@@ -1857,6 +2641,9 @@ function App() {
                   chargeRatio * 0.075,
                 life: 1700,
                 maxLife: 1700,
+                attribute: playerAttribute,
+                owner: "player" as const,
+                target: "cpu" as const,
               },
             ].slice(-8);
 
@@ -1876,6 +2663,183 @@ function App() {
             time;
         }
       );
+  };
+
+  const drawHitEffects = (
+    ctx: CanvasRenderingContext2D,
+    canvas: HTMLCanvasElement,
+    effects: HitEffect[]
+  ) => {
+    if (effects.length === 0) {
+      return;
+    }
+
+    ctx.save();
+    ctx.globalCompositeOperation = "screen";
+
+    effects.forEach((effect) => {
+      const alpha =
+        Math.max(0, effect.life / effect.maxLife);
+      const x = effect.x * canvas.width;
+      const y = effect.y * canvas.height;
+      const radius =
+        30 + (1 - alpha) * 160 + effect.radius * canvas.width;
+
+      const bloom = ctx.createRadialGradient(
+        x,
+        y,
+        4,
+        x,
+        y,
+        radius
+      );
+
+      bloom.addColorStop(0, "rgba(255,255,255,1)");
+      bloom.addColorStop(0.18, `${effect.color}ee`);
+      bloom.addColorStop(0.5, `${effect.color}66`);
+      bloom.addColorStop(1, "rgba(0,0,0,0)");
+
+      ctx.fillStyle = bloom;
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = `${effect.color}cc`;
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(x, y, radius * 0.62, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.fillStyle = "rgba(255,255,255,0.95)";
+      ctx.font = "700 28px Arial";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(`-${effect.damage}`, x, y - 8);
+    });
+
+    ctx.restore();
+
+    hitEffectsRef.current = effects
+      .map((effect) => ({
+        ...effect,
+        life: effect.life - 16,
+      }))
+      .filter((effect) => effect.life > 0);
+  };
+
+  const drawCpuSilhouette = (
+    ctx: CanvasRenderingContext2D,
+    canvas: HTMLCanvasElement,
+    time: number
+  ) => {
+    const cpuAttribute =
+      playerAttributes[3] &&
+      playerAttributes[3] !== "none"
+        ? playerAttributes[3]
+        : "fire";
+    const cpuColor =
+      getAttributeColor(cpuAttribute);
+    const cx = canvas.width * 0.82;
+    const cy = canvas.height * 0.5;
+    const pulse =
+      0.5 + Math.sin(time / 260) * 0.5;
+
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.strokeStyle = cpuColor;
+    ctx.fillStyle = "rgba(255,255,255,0.04)";
+    ctx.lineWidth = 5;
+    ctx.shadowBlur = 26;
+    ctx.shadowColor = cpuColor;
+
+    ctx.beginPath();
+    ctx.arc(0, -120, 42 + pulse * 4, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.ellipse(0, 10, 58, 94, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(-54, 26);
+    ctx.lineTo(-120, 100);
+    ctx.moveTo(54, 26);
+    ctx.lineTo(120, 100);
+    ctx.moveTo(-28, 104);
+    ctx.lineTo(-32, 190);
+    ctx.moveTo(28, 104);
+    ctx.lineTo(34, 190);
+    ctx.stroke();
+
+    const barWidth = 160;
+    const barHeight = 14;
+    const barX = -barWidth / 2;
+    const barY = -205;
+
+    ctx.fillStyle = "rgba(0,0,0,0.4)";
+    ctx.fillRect(barX, barY, barWidth, barHeight);
+    ctx.fillStyle = cpuColor;
+    ctx.fillRect(
+      barX,
+      barY,
+      barWidth * (cpuHP / 100),
+      barHeight
+    );
+    ctx.strokeStyle = "rgba(255,255,255,0.4)";
+    ctx.strokeRect(barX, barY, barWidth, barHeight);
+
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.font = "700 18px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText("CPU", 0, -180);
+
+    ctx.restore();
+  };
+
+  const drawFloatingHealthBars = (
+    ctx: CanvasRenderingContext2D,
+    canvas: HTMLCanvasElement,
+    poses: Point[][]
+  ) => {
+    const displayTargets =
+      playerAttributes
+        .map((attribute, index) => ({
+          index,
+          attribute,
+        }))
+        .filter(
+          ({ attribute }) =>
+            attribute !== "none"
+        );
+
+    displayTargets.forEach(({ index, attribute }) => {
+      const pose = poses[index];
+      if (!pose) return;
+
+      const nose = pose[0];
+      if (!nose) return;
+
+      const style =
+        ATTRIBUTE_STYLES[attribute] ?? ATTRIBUTE_STYLES.none;
+      const barWidth = 120;
+      const barHeight = 12;
+      const x = nose.x * canvas.width - barWidth / 2;
+      const y = nose.y * canvas.height - 74;
+      const hpRatio = Math.max(
+        0,
+        Math.min(1, (playerHP[index] ?? 100) / 100)
+      );
+
+      ctx.save();
+      ctx.fillStyle = "rgba(0,0,0,0.35)";
+      ctx.fillRect(x, y, barWidth, barHeight);
+      ctx.fillStyle = style.color;
+      ctx.fillRect(x, y, barWidth * hpRatio, barHeight);
+      ctx.strokeStyle = "rgba(255,255,255,0.35)";
+      ctx.strokeRect(x, y, barWidth, barHeight);
+      ctx.restore();
+    });
   };
 
   const detect = () => {
@@ -1937,18 +2901,239 @@ function App() {
           now
         );
 
-      setHands(
-        handResult.landmarks.length
-      );
+      const normalizedHands =
+        normalizeHandSides(
+          handResult.landmarks,
+          handResult.handednesses
+        );
+
+      const totalHands =
+        normalizedHands.balancedHands.length;
+
+      const handCountBalanced =
+        isBalancedHandCount(
+          handResult.landmarks.length,
+          handResult.handednesses
+        );
+
+      setHands(totalHands);
 
       setPoseDetected(
         poseResult.landmarks.length > 0
       );
 
+      if (!handCountBalanced) {
+        setStatus(
+          "左右の手を自動で同数に揃えています"
+        );
+      } else if (totalHands === 0) {
+        setStatus(
+          "手をカメラに見せてください"
+        );
+      } else if (totalHands === 1) {
+        setStatus(
+          "1つの手を認識中"
+        );
+      } else if (totalHands <= MAX_HANDS) {
+        setStatus(
+          "手を認識中..."
+        );
+      }
+
+      // --------------------------------
+      // プレイヤーの見た目から属性を判定
+      // --------------------------------
+
+      const attributeCanvas =
+        document.createElement("canvas");
+
+      const attributeCtx =
+        attributeCanvas.getContext("2d");
+
+      if (attributeCtx && video.videoWidth > 0) {
+        attributeCanvas.width =
+          video.videoWidth;
+
+        attributeCanvas.height =
+          video.videoHeight;
+
+        attributeCtx.drawImage(
+          video,
+          0,
+          0,
+          attributeCanvas.width,
+          attributeCanvas.height
+        );
+
+        poseResult.landmarks
+          .slice(0, MAX_PLAYERS)
+          .forEach((pose, playerIndex) => {
+            const nose = pose[0];
+            const leftShoulder = pose[11];
+            const rightShoulder = pose[12];
+
+            if (
+              !nose ||
+              !leftShoulder ||
+              !rightShoulder
+            ) {
+              return;
+            }
+
+            const shoulderWidth =
+              Math.abs(
+                rightShoulder.x -
+                  leftShoulder.x
+              );
+
+            // 頭周辺を少し広めに取得
+            const headWidth =
+              Math.max(
+                50,
+                shoulderWidth *
+                  attributeCanvas.width *
+                  0.8
+              );
+
+            const headHeight =
+              headWidth * 0.9;
+
+            const headX =
+              nose.x *
+                attributeCanvas.width -
+              headWidth / 2;
+
+            const headY =
+              nose.y *
+                attributeCanvas.height -
+              headHeight * 0.75;
+
+            const detectedAttribute =
+              detectVisualAttribute(
+                attributeCtx,
+                headX,
+                headY,
+                headWidth,
+                headHeight
+              );
+
+            // --------------------------------
+            // 服・上半身の色から追加判定
+            // --------------------------------
+
+            const bodyTop =
+              Math.min(
+                leftShoulder.y,
+                rightShoulder.y
+              );
+
+            const bodyBottom =
+              bodyTop +
+              Math.abs(
+                leftShoulder.y -
+                  nose.y
+              ) *
+                2.5;
+
+            const bodyWidth =
+              shoulderWidth *
+              attributeCanvas.width *
+              1.5;
+
+            const bodyHeight =
+              Math.max(
+                80,
+                (bodyBottom - bodyTop) *
+                  attributeCanvas.height
+              );
+
+            const bodyX =
+              ((leftShoulder.x +
+                rightShoulder.x) /
+                2) *
+                attributeCanvas.width -
+              bodyWidth / 2;
+
+            const bodyY =
+              bodyTop *
+                attributeCanvas.height;
+
+            const clothingAttribute =
+              detectClothingAttribute(
+                attributeCtx,
+                bodyX,
+                bodyY,
+                bodyWidth,
+                bodyHeight
+              );
+
+            const finalAttribute =
+              detectedAttribute === "god"
+                ? "god"
+                : clothingAttribute !== "none"
+                  ? clothingAttribute
+                  : detectedAttribute;
+
+            if (
+              finalAttribute !== "none"
+            ) {
+              // プレイヤーごとの判定履歴を取得
+              const history =
+                visualAttributeHistoryRef.current;
+
+              if (!history[playerIndex]) {
+                history[playerIndex] = [];
+              }
+
+              history[playerIndex] = [
+                ...history[playerIndex],
+                detectedAttribute,
+              ].slice(-3);
+
+              // 3回連続で同じ属性なら確定
+              const recent =
+                history[playerIndex];
+
+              const isStable =
+                recent.length === 3 &&
+                recent.every(
+                  (attribute) =>
+                    attribute ===
+                    detectedAttribute
+                );
+
+              if (isStable) {
+                setPlayerAttributes(
+                  (current) => {
+                    if (
+                      current[playerIndex] ===
+                      detectedAttribute
+                    ) {
+                      return current;
+                    }
+
+                    const next = [...current];
+
+                    next[playerIndex] =
+                      detectedAttribute;
+
+                    return next;
+                  }
+                );
+
+                console.log(
+                  `PLAYER ${playerIndex + 1} 属性確定: ${detectedAttribute}`
+                );
+              }
+            }
+          });
+      }
+
       updatePunchFireballs(
-        handResult.landmarks,
+        normalizedHands.balancedHands,
         now
       );
+      spawnCpuAttack(now);
 
       let currentMouthOpen = false;
       let currentLeftEyeOpen = false;
@@ -2074,7 +3259,7 @@ function App() {
       }
 
       draw(
-        handResult.landmarks,
+        normalizedHands.balancedHands,
         poseResult.landmarks,
         faceResult.faceLandmarks,
         currentMouthOpen &&
@@ -2232,11 +3417,29 @@ function App() {
       time
     );
 
+    drawCpuSilhouette(
+      ctx,
+      canvas,
+      time
+    );
+
+    drawFloatingHealthBars(
+      ctx,
+      canvas,
+      poses
+    );
+
     drawFireballs(
       ctx,
       canvas,
       fireballs,
       time
+    );
+
+    drawHitEffects(
+      ctx,
+      canvas,
+      hitEffectsRef.current
     );
 
     const HAND_CONNECTIONS = [
@@ -2423,6 +3626,46 @@ function App() {
 
   return (
     <div className="app">
+      {showSettings && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0, 0, 0, 0.8)",
+            zIndex: 1000,
+            backdropFilter: "blur(4px)",
+          }}
+        >
+          <button
+            onClick={() => setShowSettings(false)}
+            style={{
+              position: "fixed",
+              top: "20px",
+              left: "20px",
+              zIndex: 1001,
+              padding: "10px 16px",
+              borderRadius: "8px",
+              border: "1px solid #555",
+              background: "#111",
+              color: "white",
+              cursor: "pointer",
+            }}
+          >
+            ← 戻る
+          </button>
+
+          <div
+            style={{
+              width: "100%",
+              maxWidth: "1100px",
+              margin: "0 auto",
+              padding: "64px 20px 20px",
+            }}
+          >
+            <Settings />
+          </div>
+        </div>
+      )}
 
       <h1>
         必殺技ジェネレーター
@@ -2431,6 +3674,121 @@ function App() {
       <p className="subtitle">
         ULTIMATE ATTACK SYSTEM
       </p>
+
+      <button
+        onClick={() => setShowSettings(true)}
+        style={{
+          display: "block",
+          margin: "12px auto 18px",
+          padding: "10px 18px",
+          borderRadius: "8px",
+          border: "1px solid #555",
+          background: "#111",
+          color: "white",
+          cursor: "pointer",
+          fontSize: "14px",
+        }}
+      >
+        ⚙ 設定
+      </button>
+
+      <div className="battle-hud">
+        <div
+          className="player-card cpu-card"
+          style={{
+            borderColor: "#ff7a59",
+            boxShadow: "0 0 18px rgba(255,122,89,0.25)",
+          }}
+        >
+          <div className="player-header">
+            <span>CPU</span>
+            <strong style={{ color: "#ff7a59" }}>
+              敵
+            </strong>
+          </div>
+
+          <div className="player-hp-row">
+            <span>HP {cpuHP}</span>
+            <span>{Math.round((cpuHP / 100) * 100)}%</span>
+          </div>
+
+          <div className="player-bar">
+            <div
+              className="player-bar-fill"
+              style={{
+                width: `${(cpuHP / 100) * 100}%`,
+                background: "#ff7a59",
+              }}
+            />
+          </div>
+        </div>
+
+        {visiblePlayerEntries.map(
+          ({ index, attribute }) => {
+            const style =
+              ATTRIBUTE_STYLES[
+                attribute
+              ] ?? ATTRIBUTE_STYLES.none;
+
+            const hpRatio =
+              getPlayerHealthRatio(index);
+
+            return (
+              <div
+                key={index}
+                className="player-card"
+                style={{
+                  borderColor:
+                    style.color,
+                  boxShadow:
+                    `0 0 18px ${style.soft}`,
+                }}
+              >
+                <div className="player-header">
+                  <span>PLAYER {index + 1}</span>
+                  <strong
+                    style={{
+                      color: style.color,
+                    }}
+                  >
+                    {style.label}
+                  </strong>
+                </div>
+
+                <div className="player-hp-row">
+                  <span>
+                    HP {playerHP[index] ?? 100}
+                  </span>
+                  <span>
+                    {Math.round(
+                      hpRatio * 100
+                    )}%
+                  </span>
+                </div>
+
+                <div className="player-bar">
+                  <div
+                    className="player-bar-fill"
+                    style={{
+                      width: `${hpRatio * 100}%`,
+                      background:
+                        style.color,
+                    }}
+                  />
+                </div>
+              </div>
+            );
+          }
+        )}
+      </div>
+
+      {battleWinner && (
+        <div className="battle-result">
+          {battleWinner === "PLAYER"
+            ? "PLAYER WIN"
+            : "CPU WIN"}
+        </div>
+      )}
 
       <div className="camera">
 
