@@ -6,7 +6,6 @@ import {
   FaceLandmarker,
 } from "@mediapipe/tasks-vision";
 
-
 import "./App.css";
 
 type Point = {
@@ -69,39 +68,6 @@ function distance(a: Point, b: Point) {
   );
 }
 
-
-// 目の開き具合を計算
-function getEyeRatio(
-  face: Point[],
-  upper1: number,
-  upper2: number,
-  lower1: number,
-  lower2: number,
-  left: number,
-  right: number
-) {
-  const a = face[upper1];
-  const b = face[upper2];
-  const c = face[lower1];
-  const d = face[lower2];
-  const e = face[left];
-  const f = face[right];
-
-  if (!a || !b || !c || !d || !e || !f) {
-    return 0;
-  }
-
-  const vertical1 = distance(a, c);
-  const vertical2 = distance(b, d);
-  const horizontal = distance(e, f);
-
-  if (horizontal === 0) {
-    return 0;
-  }
-
-  return (vertical1 + vertical2) / (2 * horizontal);
-}
-        
 function App() {
   const videoRef =
     useRef<HTMLVideoElement>(null);
@@ -142,18 +108,6 @@ function App() {
   const [mouthOpen, setMouthOpen] =
     useState(false);
 
-  const [leftEyeOpen, setLeftEyeOpen] =
-    useState(false);
-
-  const [rightEyeOpen, setRightEyeOpen] =
-    useState(false);
-
-  const [leftEyeRatio, setLeftEyeRatio] =
-    useState(0);
-
-  const [rightEyeRatio, setRightEyeRatio] =
-    useState(0);
-
   const [mouthRatio, setMouthRatio] =
     useState(0);
 
@@ -185,7 +139,6 @@ function App() {
       streamRef.current = stream;
 
       if (!videoRef.current) {
-        stream.getTracks().forEach((track) => track.stop());
         return;
       }
 
@@ -387,8 +340,8 @@ function App() {
       lastTimeRef.current =
         video.currentTime;
 
-      // eslint-disable-next-line react-hooks/purity
-      const now = performance.now();
+      const now =
+        performance.now();
 
       // 手
       const handResult =
@@ -480,45 +433,6 @@ function App() {
         setMouthOpen(false);
 
         setMouthRatio(0);
-      }
-
-      // ----------------------------
-      // 左目・右目の判定
-      // ----------------------------
-
-      if (faceResult.faceLandmarks.length > 0) {
-        const face = faceResult.faceLandmarks[0];
-
-        const leftEye = getEyeRatio(
-          face,
-          159,
-          160,
-          145,
-          144,
-          33,
-          133
-        );
-
-        const rightEye = getEyeRatio(
-          face,
-          386,
-          385,
-          374,
-          380,
-          362,
-          263
-        );
-
-        setLeftEyeRatio(leftEye);
-        setRightEyeRatio(rightEye);
-
-        setLeftEyeOpen(leftEye > 0.15);
-        setRightEyeOpen(rightEye > 0.15);
-      } else {
-        setLeftEyeOpen(false);
-        setRightEyeOpen(false);
-        setLeftEyeRatio(0);
-        setRightEyeRatio(0);
       }
 
       draw(
@@ -945,22 +859,6 @@ function App() {
         {" "}
         {mouthRatio.toFixed(3)}
       </div>
-
-        <div className="eye-status">
-          <strong>
-            LEFT EYE: {leftEyeOpen ? "OPEN" : "CLOSED"}
-          </strong>
-          <span></span>
-          <strong>
-            RIGHT EYE: {rightEyeOpen ? "OPEN" : "CLOSED"}
-          </strong>
-        </div>
-
-        <div className="eye-debug">
-          LEFT: {leftEyeRatio.toFixed(3)}
-          <span></span>
-          RIGHT: {rightEyeRatio.toFixed(3)}
-        </div>
 
       <div className="instruction">
 
