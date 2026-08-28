@@ -112,6 +112,7 @@ const MIN_PUNCH_MOVE_SCALE = 0.18;
 const MIN_PUNCH_MOVE_DISTANCE = 0.012;
 const MIN_PUNCH_STRAIGHTNESS = 0.58;
 const PUNCH_COOLDOWN = 520;
+const BEAM_DAMAGE = 6;
 const BEAM_DAMAGE_COOLDOWN = 500;
 const SHOCKWAVE_DAMAGE_COOLDOWN = 650;
 const DAMAGE_FLASH_TIME = 650;
@@ -128,9 +129,14 @@ const THUNDER_ABOVE_HEAD_MARGIN = 0.08;
 const HEAL_AMOUNT = 16;
 const HEAL_CHARGE_TIME = 900;
 const HEAL_COOLDOWN = 2800;
-const VOICE_ATTACK_BASE_DAMAGE = 6;
+const VOICE_CHARACTER_DAMAGE = 2;
 const VOICE_ATTACK_COOLDOWN = 260;
 const VOICE_ATTACK_LIFE = 1800;
+const VOICE_SOUND_START_LEVEL = 7;
+const VOICE_SOUND_END_LEVEL = 3;
+const VOICE_SILENCE_RESET_TIME = 720;
+const VOICE_MOUTH_ACTIVITY_DECAY = 0.9;
+const VOICE_MOUTH_ACTIVITY_WEIGHT = 18;
 const MAX_HP = 300;
 
 type BattleWinner = "PLAYER 1" | "PLAYER 2";
@@ -178,6 +184,7 @@ type VoiceAttackTarget = {
   start: Point;
   targetCenter: Point;
   targetRadius: number;
+  eyesClosed: boolean;
 };
 
 type SpeechRecognitionAlternativeLike = {
@@ -1535,9 +1542,33 @@ function App() {
 
   const latestVoiceAttackTargetRef = useRef<VoiceAttackTarget | null>(null);
 
+  const latestVoiceTargetsRef = useRef<
+    Partial<Record<PlayerId, VoiceAttackTarget>>
+  >({});
+
+  const voiceMouthRatiosRef = useRef<Record<PlayerId, number>>({
+    player1: 0,
+    player2: 0,
+  });
+
+  const voiceMouthActivityRef = useRef<Record<PlayerId, number>>({
+    player1: 0,
+    player2: 0,
+  });
+
+  const speakingVoiceTargetRef = useRef<VoiceAttackTarget | null>(null);
+
+  const voiceSessionActiveRef = useRef(false);
+
+  const voiceUtteranceFiredRef = useRef(false);
+
+  const voiceLastSoundAtRef = useRef(0);
+
   const lastVoiceAttackAtRef = useRef(0);
 
   const lastVoiceAttackTextRef = useRef("");
+
+  const recentVoiceAttackTextsRef = useRef<{ text: string; at: number }[]>([]);
 
   const micLevelRef = useRef(0);
 
@@ -1677,6 +1708,19 @@ function App() {
     attackRecordsRef.current = [];
     nextAttackIdRef.current = 1;
     lastVoiceAttackTextRef.current = "";
+    voiceSessionActiveRef.current = false;
+    voiceUtteranceFiredRef.current = false;
+    speakingVoiceTargetRef.current = null;
+    voiceLastSoundAtRef.current = 0;
+    recentVoiceAttackTextsRef.current = [];
+    voiceMouthRatiosRef.current = {
+      player1: 0,
+      player2: 0,
+    };
+    voiceMouthActivityRef.current = {
+      player1: 0,
+      player2: 0,
+    };
     fireballsRef.current = [];
     voiceTextAttacksRef.current = [];
     hitEffectsRef.current = [];
@@ -1737,9 +1781,30 @@ function App() {
     const rms = Math.sqrt(sum / data.length);
 
     const nextLevel = Math.min(100, Math.round(rms * 260));
+    const now = performance.now();
 
     micLevelRef.current = nextLevel;
     setMicLevel(nextLevel);
+
+    if (nextLevel >= VOICE_SOUND_START_LEVEL) {
+      voiceLastSoundAtRef.current = now;
+
+      if (!voiceSessionActiveRef.current) {
+        voiceSessionActiveRef.current = true;
+        voiceUtteranceFiredRef.current = false;
+        lastVoiceAttackTextRef.current = "";
+        speakingVoiceTargetRef.current = chooseVoiceTargetFromMouthActivity();
+      }
+    } else if (
+      voiceSessionActiveRef.current &&
+      nextLevel <= VOICE_SOUND_END_LEVEL &&
+      now - voiceLastSoundAtRef.current > VOICE_SILENCE_RESET_TIME
+    ) {
+      voiceSessionActiveRef.current = false;
+      voiceUtteranceFiredRef.current = false;
+      speakingVoiceTargetRef.current = null;
+      lastVoiceAttackTextRef.current = "";
+    }
 
     audioAnimationRef.current = requestAnimationFrame(updateMicLevel);
   }, []);
@@ -1763,6 +1828,11 @@ function App() {
 
   const stopSpeechRecognition = useCallback(() => {
     recognitionShouldRunRef.current = false;
+    voiceSessionActiveRef.current = false;
+    voiceUtteranceFiredRef.current = false;
+    speakingVoiceTargetRef.current = null;
+    lastVoiceAttackTextRef.current = "";
+    recentVoiceAttackTextsRef.current = [];
 
     const recognition = recognitionRef.current;
 
@@ -1802,20 +1872,60 @@ function App() {
     }, 450);
   };
 
-  const getCurrentVoiceOwner = (): PlayerId =>
-    latestVoiceAttackTargetRef.current?.owner ?? "player1";
+  const chooseVoiceTargetFromMouthActivity = () => {
+    const candidates = (["player1", "player2"] as PlayerId[])
+      .map((playerId) => {
+        const target = latestVoiceTargetsRef.current[playerId];
 
-  const wasRecentlyUsedForVoiceAttack = (text: string) => {
-    const trimmedText = text.trim().replace(/\s+/g, " ");
+        if (!target) {
+          return null;
+        }
 
-    if (!trimmedText || !lastVoiceAttackTextRef.current) {
-      return false;
+        return {
+          target,
+          score:
+            voiceMouthActivityRef.current[playerId] +
+            voiceMouthRatiosRef.current[playerId] * 0.9,
+        };
+      })
+      .filter(
+        (candidate): candidate is { target: VoiceAttackTarget; score: number } =>
+          candidate !== null,
+      )
+      .sort((a, b) => b.score - a.score);
+
+    return candidates[0]?.target ?? latestVoiceAttackTargetRef.current;
+  };
+
+  const getCurrentVoiceTarget = (): VoiceAttackTarget | null =>
+    speakingVoiceTargetRef.current ??
+    chooseVoiceTargetFromMouthActivity() ??
+    latestVoiceTargetsRef.current.player1 ??
+    latestVoiceTargetsRef.current.player2 ??
+    null;
+
+  const lockVoiceTargetIfNeeded = () => {
+    if (!speakingVoiceTargetRef.current) {
+      speakingVoiceTargetRef.current = chooseVoiceTargetFromMouthActivity();
     }
 
-    return (
-      performance.now() - lastVoiceAttackAtRef.current < 1200 &&
-      (trimmedText.startsWith(lastVoiceAttackTextRef.current) ||
-        lastVoiceAttackTextRef.current.startsWith(trimmedText))
+    if (!voiceSessionActiveRef.current) {
+      voiceSessionActiveRef.current = true;
+      voiceUtteranceFiredRef.current = false;
+      lastVoiceAttackTextRef.current = "";
+      voiceLastSoundAtRef.current = performance.now();
+    }
+  };
+
+  const isRecentlyFiredVoiceText = (text: string, now: number) => {
+    recentVoiceAttackTextsRef.current =
+      recentVoiceAttackTextsRef.current.filter((item) => now - item.at < 2600);
+
+    return recentVoiceAttackTextsRef.current.some(
+      (item) =>
+        text === item.text ||
+        text.startsWith(item.text) ||
+        item.text.startsWith(text),
     );
   };
 
@@ -1861,13 +1971,18 @@ function App() {
         }
 
         if (result.isFinal) {
-          const owner = getCurrentVoiceOwner();
+          lockVoiceTargetIfNeeded();
+          const target = getCurrentVoiceTarget();
+
+          if (!target?.eyesClosed) {
+            setSpeechStatus("目を閉じるとVOICEに入ります");
+            continue;
+          }
+
+          const owner = target.owner;
           setPlayerTranscript(owner, text);
           setSpeechStatus("認識しました");
-          if (
-            triggerVoiceTextAttack(text) ||
-            wasRecentlyUsedForVoiceAttack(text)
-          ) {
+          if (triggerVoiceTextAttack(text)) {
             clearPlayerTranscriptSoon(owner, text);
           }
         } else {
@@ -1876,15 +1991,17 @@ function App() {
       }
 
       if (interimTranscript) {
-        const owner = getCurrentVoiceOwner();
+        lockVoiceTargetIfNeeded();
+        const target = getCurrentVoiceTarget();
+
+        if (!target?.eyesClosed) {
+          setSpeechStatus("目を閉じるとVOICEに入ります");
+          return;
+        }
+
+        const owner = target.owner;
         setPlayerTranscript(owner, interimTranscript);
         setSpeechStatus("聞き取り中");
-        if (
-          triggerVoiceTextAttack(interimTranscript) ||
-          wasRecentlyUsedForVoiceAttack(interimTranscript)
-        ) {
-          clearPlayerTranscriptSoon(owner, interimTranscript);
-        }
       }
     };
 
@@ -2267,8 +2384,11 @@ function App() {
     }
 
     const trimmedText = text.trim().replace(/\s+/g, " ");
-    const target = latestVoiceAttackTargetRef.current;
+    const target = getCurrentVoiceTarget();
     const now = performance.now();
+    const utteranceLockActive =
+      voiceUtteranceFiredRef.current &&
+      now - lastVoiceAttackAtRef.current < 900;
     const textLooksLikeSameUtterance =
       lastVoiceAttackTextRef.current !== "" &&
       (trimmedText.startsWith(lastVoiceAttackTextRef.current) ||
@@ -2277,6 +2397,9 @@ function App() {
     if (
       !trimmedText ||
       !target ||
+      !target.eyesClosed ||
+      utteranceLockActive ||
+      isRecentlyFiredVoiceText(trimmedText, now) ||
       (textLooksLikeSameUtterance &&
         now - lastVoiceAttackAtRef.current < 1200) ||
       now - lastVoiceAttackAtRef.current < VOICE_ATTACK_COOLDOWN
@@ -2286,26 +2409,18 @@ function App() {
 
     const levelRatio = Math.min(1, Math.max(0.18, micLevelRef.current / 100));
     const attack = recordAttack("voice", target.owner, target.target, now);
-    const fontSize = Math.round(28 + levelRatio * 52);
-    const totalDamage =
-      VOICE_ATTACK_BASE_DAMAGE +
-      Math.round(levelRatio * 14) +
-      Math.min(8, Math.ceil(trimmedText.length / 3));
+    const fontSize = Math.round(58 + levelRatio * 96);
     const letters = Array.from(trimmedText.replace(/\s+/g, "")).slice(0, 14);
     const direction = getNormalizedDirection(target.start, target.targetCenter);
     const perpendicular = {
       x: -direction.y,
       y: direction.x,
     };
-    const characterDamage = Math.max(
-      1,
-      Math.ceil(totalDamage / Math.max(1, letters.length)),
-    );
 
     voiceTextAttacksRef.current = [
       ...voiceTextAttacksRef.current,
       ...letters.map((letter, index) => {
-        const spread = (index - (letters.length - 1) / 2) * 0.028;
+        const spread = (index - (letters.length - 1) / 2) * 0.055;
         const seed = Math.random() * 1000;
         const startX = target.start.x + perpendicular.x * spread;
         const startY = target.start.y + perpendicular.y * spread;
@@ -2327,11 +2442,11 @@ function App() {
           targetY: target.targetCenter.y,
           fontSize: Math.round(fontSize * (0.86 + (index % 3) * 0.08)),
           radius: 0.035 + levelRatio * 0.06,
-          damage: characterDamage,
-          delay: index * 52,
+          damage: VOICE_CHARACTER_DAMAGE,
+          delay: index * 82,
           seed,
-          life: VOICE_ATTACK_LIFE + index * 52,
-          maxLife: VOICE_ATTACK_LIFE + index * 52,
+          life: VOICE_ATTACK_LIFE + index * 82,
+          maxLife: VOICE_ATTACK_LIFE + index * 82,
           owner: target.owner,
           target: target.target,
           attackId: attack.id,
@@ -2342,6 +2457,17 @@ function App() {
 
     lastVoiceAttackAtRef.current = now;
     lastVoiceAttackTextRef.current = trimmedText;
+    recentVoiceAttackTextsRef.current = [
+      ...recentVoiceAttackTextsRef.current,
+      {
+        text: trimmedText,
+        at: now,
+      },
+    ].slice(-8);
+    voiceSessionActiveRef.current = true;
+    voiceUtteranceFiredRef.current = true;
+    speakingVoiceTargetRef.current = target;
+    voiceLastSoundAtRef.current = now;
     return target.owner;
   };
 
@@ -2866,26 +2992,51 @@ function App() {
         faceAttackStates,
       );
 
-      const voiceAttacker =
-        battlePlayers.find((player) => player.attack.mouthOpen) ??
-        battlePlayers[0];
-      const voiceDefender = voiceAttacker
-        ? getOpponent(voiceAttacker, battlePlayers)
-        : undefined;
-      const voiceStart = voiceAttacker
-        ? getMouthCenter(voiceAttacker.face)
-        : null;
+      const voiceTargets = battlePlayers.reduce<
+        Partial<Record<PlayerId, VoiceAttackTarget>>
+      >((targets, player) => {
+        const defender = getOpponent(player, battlePlayers);
+        const start = getMouthCenter(player.face);
 
-      latestVoiceAttackTargetRef.current =
-        voiceAttacker && voiceDefender && voiceStart
-          ? {
-              owner: voiceAttacker.id,
-              target: voiceDefender.id,
-              start: voiceStart,
-              targetCenter: voiceDefender.center,
-              targetRadius: voiceDefender.radius,
-            }
-          : null;
+        if (!defender || !start) {
+          return targets;
+        }
+
+        targets[player.id] = {
+          owner: player.id,
+          target: defender.id,
+          start,
+          targetCenter: defender.center,
+          targetRadius: defender.radius,
+          eyesClosed: !player.attack.leftEyeOpen && !player.attack.rightEyeOpen,
+        };
+
+        return targets;
+      }, {});
+      const voiceAttacker =
+        battlePlayers
+          .filter((player) => player.attack.mouthOpen)
+          .sort((a, b) => b.attack.mouthRatio - a.attack.mouthRatio)[0] ??
+        battlePlayers[0];
+
+      latestVoiceTargetsRef.current = voiceTargets;
+      battlePlayers.forEach((player) => {
+        const previousRatio = voiceMouthRatiosRef.current[player.id];
+        const mouthDelta = Math.abs(player.attack.mouthRatio - previousRatio);
+        const openBoost = player.attack.mouthOpen
+          ? Math.max(0, player.attack.mouthRatio - 0.18) * 0.8
+          : 0;
+
+        voiceMouthActivityRef.current[player.id] =
+          voiceMouthActivityRef.current[player.id] *
+            VOICE_MOUTH_ACTIVITY_DECAY +
+          mouthDelta * VOICE_MOUTH_ACTIVITY_WEIGHT +
+          openBoost;
+        voiceMouthRatiosRef.current[player.id] = player.attack.mouthRatio;
+      });
+      latestVoiceAttackTargetRef.current = voiceAttacker
+        ? voiceTargets[voiceAttacker.id] ?? null
+        : null;
 
       const handAssignments = assignHandsToPlayers(
         handResult.landmarks,
@@ -3104,7 +3255,7 @@ function App() {
 
             applyBattleDamage(
               defender.id,
-              8,
+              BEAM_DAMAGE,
               defender.center.x,
               defender.center.y,
               getPlayerColor(defender.id),
@@ -3604,9 +3755,9 @@ function App() {
           </div>
 
           <div className="instruction">
-            手・指・顔・全身
+            手・指・顔・全身・声
             <br />
-            <strong>全部使って必殺技を放て。</strong>
+            <strong>目を閉じて言葉を放て。</strong>
           </div>
         </>
       )}
