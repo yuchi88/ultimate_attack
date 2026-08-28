@@ -4,10 +4,16 @@ export type BattleSettings = {
   showJointGuides: boolean;
 };
 
-type SettingsPanelProps = {
+export type AppTab = "battle" | "settings";
+
+type SettingsTabsProps = {
+  activeTab: AppTab;
+  onChange: (tab: AppTab) => void;
+};
+
+type SettingsScreenProps = {
   settings: BattleSettings;
   onApply: (settings: BattleSettings) => void;
-  onClose: () => void;
 };
 
 const SETTINGS_STORAGE_KEYS = {
@@ -89,11 +95,42 @@ export function saveBattleSettings(
   );
 }
 
-function SettingsPanel({
+export function SettingsTabs({
+  activeTab,
+  onChange,
+}: SettingsTabsProps) {
+  return (
+    <nav className="app-tabs">
+      <button
+        type="button"
+        className={
+          activeTab === "battle"
+            ? "app-tab active"
+            : "app-tab"
+        }
+        onClick={() => onChange("battle")}
+      >
+        BATTLE
+      </button>
+      <button
+        type="button"
+        className={
+          activeTab === "settings"
+            ? "app-tab active"
+            : "app-tab"
+        }
+        onClick={() => onChange("settings")}
+      >
+        SETTINGS
+      </button>
+    </nav>
+  );
+}
+
+function SettingsScreen({
   settings,
   onApply,
-  onClose,
-}: SettingsPanelProps) {
+}: SettingsScreenProps) {
   const applyNext = (
     nextSettings: BattleSettings
   ) => {
@@ -105,17 +142,10 @@ function SettingsPanel({
   };
 
   return (
-    <div className="settings-overlay">
-      <div className="settings-panel">
+    <div className="settings-screen">
+      <div className="settings-page">
         <div className="settings-header">
           <h2>設定</h2>
-          <button
-            type="button"
-            className="close-settings"
-            onClick={onClose}
-          >
-            ✕
-          </button>
         </div>
 
         <div className="settings-item">
@@ -188,17 +218,11 @@ function SettingsPanel({
         </div>
 
         <div className="settings-footer">
-          <button
-            type="button"
-            className="settings-primary"
-            onClick={onClose}
-          >
-            適用して戻る
-          </button>
+          自動保存中
         </div>
       </div>
     </div>
   );
 }
 
-export default SettingsPanel;
+export default SettingsScreen;

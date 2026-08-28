@@ -5,9 +5,11 @@ import {
   PoseLandmarker,
   FaceLandmarker,
 } from "@mediapipe/tasks-vision";
-import SettingsPanel, {
+import SettingsScreen, {
+  SettingsTabs,
   loadBattleSettings,
   saveBattleSettings,
+  type AppTab,
   type BattleSettings,
 } from "./pages/setting/setting";
 
@@ -2323,8 +2325,8 @@ function App() {
   const [mouthRatio, setMouthRatio] =
     useState(0);
 
-  const [showSettings, setShowSettings] =
-    useState(false);
+  const [activeTab, setActiveTab] =
+    useState<AppTab>("battle");
 
   const [maxPlayers, setMaxPlayers] =
     useState(2);
@@ -4222,19 +4224,22 @@ function App() {
   return (
     <div className="app">
 
-      {showSettings && (
-        <SettingsPanel
+      <SettingsTabs
+        activeTab={activeTab}
+        onChange={setActiveTab}
+      />
+
+      {activeTab === "settings" ? (
+        <SettingsScreen
           settings={{
             maxPlayers,
             maxHands,
             showJointGuides,
           }}
           onApply={applySettings}
-          onClose={() =>
-            setShowSettings(false)
-          }
         />
-      )}
+      ) : (
+        <>
 
       {battleWinner && (
         <div className="battle-result-screen">
@@ -4254,7 +4259,6 @@ function App() {
               onClick={() => {
                 resetBattleState();
                 setStatus("再戦開始");
-                setShowSettings(false);
               }}
             >
               ↻ 再戦
@@ -4270,14 +4274,6 @@ function App() {
       <p className="subtitle">
         ULTIMATE ATTACK SYSTEM
       </p>
-
-      <button
-        type="button"
-        className="settings-button"
-        onClick={() => setShowSettings(true)}
-      >
-        ⚙ 設定
-      </button>
 
       <div className="status-row">
         <div className="tiny-panel">
@@ -4476,6 +4472,9 @@ function App() {
         </strong>
 
       </div>
+
+        </>
+      )}
 
     </div>
   );
