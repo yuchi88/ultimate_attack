@@ -155,13 +155,13 @@ button {
 }
 
 .info {
-  width: min(900px, 100%);
+  width: min(1100px, 100%);
 
   margin: 25px auto;
 
   display: grid;
 
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
 
   gap: 15px;
 }
@@ -192,6 +192,103 @@ button {
   margin-top: 10px;
 
   font-size: 24px;
+}
+
+.mic-panel {
+  position: relative;
+}
+
+.mic-panel.active {
+  border-color: rgba(88, 255, 154, 0.75);
+}
+
+.mic-meter {
+  width: 100%;
+  height: 6px;
+  margin-top: 12px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.mic-meter b {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #58ff9a, #53d4ff, #ffffff);
+  transition: width 80ms linear;
+}
+
+.speech-panel.active {
+  border-color: rgba(255, 204, 102, 0.75);
+}
+
+.voice-transcripts {
+  width: min(1100px, 100%);
+  margin: 10px auto 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.voice-transcript {
+  min-height: 78px;
+  padding: 14px 20px;
+  border: 1px solid rgba(255, 204, 102, 0.38);
+  border-radius: 12px;
+  background: rgba(10, 10, 10, 0.86);
+  text-align: left;
+}
+
+.voice-transcript span {
+  display: block;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 3px;
+}
+
+.player1-voice {
+  border-color: rgba(83, 212, 255, 0.46);
+}
+
+.player1-voice span {
+  color: #53d4ff;
+}
+
+.player2-voice {
+  border-color: rgba(255, 107, 107, 0.5);
+}
+
+.player2-voice span {
+  color: #ff6b6b;
+}
+
+.voice-transcript strong {
+  display: block;
+  margin-top: 6px;
+  color: white;
+  font-size: clamp(20px, 4vw, 34px);
+  line-height: 1.18;
+  overflow-wrap: anywhere;
+}
+
+.speech-control {
+  grid-column: 1 / -1;
+  text-align: left;
+}
+
+.speech-control small {
+  display: inline-block;
+  color: #9ca3af;
+  font-size: 13px;
+}
+
+.speech-start-button {
+  display: inline-flex;
+  margin-left: 14px;
+  padding: 8px 14px;
+  font-size: 13px;
+  border-radius: 999px;
 }
 
 .player-marker {

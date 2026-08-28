@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   FilesetResolver,
   HandLandmarker,
@@ -39,6 +39,29 @@ type Fireball = {
   maxLife: number;
   owner: PlayerId | null;
   attackId: number | null;
+};
+
+type VoiceTextAttack = {
+  text: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  startX: number;
+  startY: number;
+  targetX: number;
+  targetY: number;
+  fontSize: number;
+  radius: number;
+  damage: number;
+  delay: number;
+  seed: number;
+  life: number;
+  maxLife: number;
+  owner: PlayerId;
+  target: PlayerId;
+  attackId: number;
+  color: string;
 };
 
 type HitEffect = {
@@ -105,6 +128,9 @@ const THUNDER_ABOVE_HEAD_MARGIN = 0.08;
 const HEAL_AMOUNT = 16;
 const HEAL_CHARGE_TIME = 900;
 const HEAL_COOLDOWN = 2800;
+const VOICE_ATTACK_BASE_DAMAGE = 6;
+const VOICE_ATTACK_COOLDOWN = 260;
+const VOICE_ATTACK_LIFE = 1800;
 const MAX_HP = 300;
 
 type BattleWinner = "PLAYER 1" | "PLAYER 2";
@@ -139,11 +165,64 @@ type HandAssignment = {
 
 type AttackRecord = {
   id: number;
-  type: "beam" | "fireball" | "shockwave" | "thunder" | "heal";
+  type: "beam" | "fireball" | "shockwave" | "thunder" | "heal" | "voice";
   owner: PlayerId;
   target: PlayerId | null;
   startedAt: number;
   lastHitAt: number | null;
+};
+
+type VoiceAttackTarget = {
+  owner: PlayerId;
+  target: PlayerId;
+  start: Point;
+  targetCenter: Point;
+  targetRadius: number;
+};
+
+type SpeechRecognitionAlternativeLike = {
+  transcript: string;
+};
+
+type SpeechRecognitionResultLike = {
+  isFinal: boolean;
+  length: number;
+  0: SpeechRecognitionAlternativeLike;
+};
+
+type SpeechRecognitionResultsLike = {
+  length: number;
+  [index: number]: SpeechRecognitionResultLike;
+};
+
+type SpeechRecognitionEventLike = Event & {
+  resultIndex: number;
+  results: SpeechRecognitionResultsLike;
+};
+
+type SpeechRecognitionErrorEventLike = Event & {
+  error?: string;
+};
+
+type SpeechRecognitionLike = {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  maxAlternatives: number;
+  onstart: (() => void) | null;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+};
+
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
+
+type SpeechRecognitionWindow = Window & {
+  SpeechRecognition?: SpeechRecognitionConstructor;
+  webkitSpeechRecognition?: SpeechRecognitionConstructor;
 };
 
 const POSE_CONNECTIONS = [
@@ -844,6 +923,87 @@ function drawFireballs(
   ctx.restore();
 }
 
+function drawVoiceTextAttacks(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  attacks: VoiceTextAttack[],
+  time: number,
+) {
+  attacks
+    .filter((attack) => attack.delay <= 0)
+    .forEach((attack) => {
+      const alpha = Math.max(0, attack.life / attack.maxLife);
+      const progress = 1 - alpha;
+      const x = attack.x * canvas.width;
+      const y = attack.y * canvas.height;
+      const pulse = 0.92 + Math.sin(time / 70 + attack.seed) * 0.08;
+      const direction = getNormalizedDirection(
+        {
+          x: attack.x - attack.vx * 120,
+          y: attack.y - attack.vy * 120,
+          z: 0,
+        },
+        {
+          x: attack.x,
+          y: attack.y,
+          z: 0,
+        },
+      );
+
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.globalAlpha = Math.min(1, alpha * 1.4);
+
+      for (let index = 1; index <= 3; index += 1) {
+        const echoProgress = Math.max(0, progress - index * 0.055);
+        const wobble =
+          Math.sin(time / 95 + attack.seed + index * 1.9) *
+          attack.radius *
+          0.65;
+        const echoX =
+          (attack.startX + (attack.targetX - attack.startX) * echoProgress) *
+            canvas.width +
+          -direction.y * wobble * canvas.width;
+        const echoY =
+          (attack.startY + (attack.targetY - attack.startY) * echoProgress) *
+            canvas.height +
+          direction.x * wobble * canvas.height;
+
+        ctx.save();
+        ctx.globalAlpha = alpha * (0.24 / index);
+        ctx.translate(echoX, echoY);
+        ctx.scale(-1, 1);
+        ctx.font = `900 ${
+          attack.fontSize * (1 - index * 0.1)
+        }px Arial, sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = attack.color;
+        ctx.fillText(attack.text, 0, 0);
+        ctx.restore();
+      }
+
+      ctx.translate(x, y);
+      ctx.scale(-1, 1);
+      ctx.rotate(Math.sin(time / 120 + attack.seed) * 0.22);
+      ctx.font = `900 ${attack.fontSize * pulse}px Arial, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.lineJoin = "round";
+      ctx.lineWidth = Math.max(6, attack.fontSize * 0.14);
+      ctx.shadowColor = attack.color;
+      ctx.shadowBlur = 30;
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.9)";
+      ctx.strokeText(attack.text, 0, 0);
+      ctx.fillStyle = attack.color;
+      ctx.fillText(attack.text, 0, 0);
+      ctx.lineWidth = Math.max(2, attack.fontSize * 0.04);
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+      ctx.strokeText(attack.text, 0, 0);
+      ctx.restore();
+    });
+}
+
 function drawHitEffects(
   ctx: CanvasRenderingContext2D,
   canvas: HTMLCanvasElement,
@@ -1171,6 +1331,17 @@ function getFaceTarget(face: Point[]) {
   };
 }
 
+function getMouthCenter(face: Point[]) {
+  const upperLip = face[13];
+  const lowerLip = face[14];
+
+  if (!upperLip || !lowerLip) {
+    return null;
+  }
+
+  return getMidPoint(upperLip, lowerLip);
+}
+
 function getBattlePlayers(
   faces: Point[][],
   attacks: FaceAttackState[],
@@ -1336,13 +1507,39 @@ function App() {
 
   const streamRef = useRef<MediaStream | null>(null);
 
+  const audioContextRef = useRef<AudioContext | null>(null);
+
+  const audioAnalyserRef = useRef<AnalyserNode | null>(null);
+
+  const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+
+  const audioDataRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
+
+  const audioAnimationRef = useRef<number | null>(null);
+
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+
+  const recognitionShouldRunRef = useRef(false);
+
   const animationRef = useRef<number | null>(null);
 
   const lastTimeRef = useRef(-1);
 
+  const detectionPreviousTimeRef = useRef(0);
+
   const punchStatesRef = useRef<PunchHandState[]>([]);
 
   const fireballsRef = useRef<Fireball[]>([]);
+
+  const voiceTextAttacksRef = useRef<VoiceTextAttack[]>([]);
+
+  const latestVoiceAttackTargetRef = useRef<VoiceAttackTarget | null>(null);
+
+  const lastVoiceAttackAtRef = useRef(0);
+
+  const lastVoiceAttackTextRef = useRef("");
+
+  const micLevelRef = useRef(0);
 
   const hitEffectsRef = useRef<HitEffect[]>([]);
 
@@ -1398,6 +1595,23 @@ function App() {
   const [battleWinner, setBattleWinner] = useState<BattleWinner | null>(null);
 
   const [cameraStarted, setCameraStarted] = useState(false);
+
+  const [micStarted, setMicStarted] = useState(false);
+
+  const [micLevel, setMicLevel] = useState(0);
+
+  const [speechSupported, setSpeechSupported] = useState(true);
+
+  const [speechListening, setSpeechListening] = useState(false);
+
+  const [speechStatus, setSpeechStatus] = useState("待機中");
+
+  const [voiceTranscripts, setVoiceTranscripts] = useState<
+    Record<PlayerId, string>
+  >({
+    player1: "",
+    player2: "",
+  });
 
   const [modelReady, setModelReady] = useState(false);
 
@@ -1462,7 +1676,9 @@ function App() {
     };
     attackRecordsRef.current = [];
     nextAttackIdRef.current = 1;
+    lastVoiceAttackTextRef.current = "";
     fireballsRef.current = [];
+    voiceTextAttacksRef.current = [];
     hitEffectsRef.current = [];
     healEffectsRef.current = [];
     lightningEffectsRef.current = [];
@@ -1482,6 +1698,10 @@ function App() {
       player1: 0,
       player2: 0,
     };
+    setVoiceTranscripts({
+      player1: "",
+      player2: "",
+    });
     setPlayerMarkers([]);
   };
 
@@ -1497,9 +1717,264 @@ function App() {
   // カメラ
   // --------------------------------
 
+  const updateMicLevel = useCallback(() => {
+    const analyser = audioAnalyserRef.current;
+    const data = audioDataRef.current;
+
+    if (!analyser || !data) {
+      return;
+    }
+
+    analyser.getByteTimeDomainData(data);
+
+    let sum = 0;
+
+    for (const value of data) {
+      const centered = (value - 128) / 128;
+      sum += centered * centered;
+    }
+
+    const rms = Math.sqrt(sum / data.length);
+
+    const nextLevel = Math.min(100, Math.round(rms * 260));
+
+    micLevelRef.current = nextLevel;
+    setMicLevel(nextLevel);
+
+    audioAnimationRef.current = requestAnimationFrame(updateMicLevel);
+  }, []);
+
+  const stopMicMonitor = useCallback(() => {
+    if (audioAnimationRef.current) {
+      cancelAnimationFrame(audioAnimationRef.current);
+      audioAnimationRef.current = null;
+    }
+
+    audioSourceRef.current?.disconnect();
+    audioSourceRef.current = null;
+    audioAnalyserRef.current = null;
+    audioDataRef.current = null;
+    setMicStarted(false);
+    setMicLevel(0);
+
+    void audioContextRef.current?.close();
+    audioContextRef.current = null;
+  }, []);
+
+  const stopSpeechRecognition = useCallback(() => {
+    recognitionShouldRunRef.current = false;
+
+    const recognition = recognitionRef.current;
+
+    if (!recognition) {
+      return;
+    }
+
+    recognition.onend = null;
+    recognition.onstart = null;
+    recognition.onresult = null;
+    recognition.onerror = null;
+    recognition.abort();
+    recognitionRef.current = null;
+    setSpeechListening(false);
+    setSpeechStatus("停止中");
+  }, []);
+
+  const setPlayerTranscript = (playerId: PlayerId, text: string) => {
+    setVoiceTranscripts((current) => ({
+      ...current,
+      [playerId]: text,
+    }));
+  };
+
+  const clearPlayerTranscriptSoon = (playerId: PlayerId, text: string) => {
+    window.setTimeout(() => {
+      setVoiceTranscripts((current) => {
+        if (current[playerId] !== text) {
+          return current;
+        }
+
+        return {
+          ...current,
+          [playerId]: "",
+        };
+      });
+    }, 450);
+  };
+
+  const getCurrentVoiceOwner = (): PlayerId =>
+    latestVoiceAttackTargetRef.current?.owner ?? "player1";
+
+  const wasRecentlyUsedForVoiceAttack = (text: string) => {
+    const trimmedText = text.trim().replace(/\s+/g, " ");
+
+    if (!trimmedText || !lastVoiceAttackTextRef.current) {
+      return false;
+    }
+
+    return (
+      performance.now() - lastVoiceAttackAtRef.current < 1200 &&
+      (trimmedText.startsWith(lastVoiceAttackTextRef.current) ||
+        lastVoiceAttackTextRef.current.startsWith(trimmedText))
+    );
+  };
+
+  const startSpeechRecognition = () => {
+    const SpeechRecognition =
+      (window as SpeechRecognitionWindow).SpeechRecognition ??
+      (window as SpeechRecognitionWindow).webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      setSpeechSupported(false);
+      setSpeechListening(false);
+      setSpeechStatus("このブラウザは音声認識に未対応です");
+      return;
+    }
+
+    stopSpeechRecognition();
+
+    const recognition = new SpeechRecognition();
+
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = "ja-JP";
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => {
+      setSpeechListening(true);
+      setSpeechStatus("聞き取り中");
+    };
+
+    recognition.onresult = (event) => {
+      let interimTranscript = "";
+
+      for (
+        let index = event.resultIndex;
+        index < event.results.length;
+        index += 1
+      ) {
+        const result = event.results[index];
+        const text = result[0]?.transcript.trim() ?? "";
+
+        if (!text) {
+          continue;
+        }
+
+        if (result.isFinal) {
+          const owner = getCurrentVoiceOwner();
+          setPlayerTranscript(owner, text);
+          setSpeechStatus("認識しました");
+          if (
+            triggerVoiceTextAttack(text) ||
+            wasRecentlyUsedForVoiceAttack(text)
+          ) {
+            clearPlayerTranscriptSoon(owner, text);
+          }
+        } else {
+          interimTranscript = text;
+        }
+      }
+
+      if (interimTranscript) {
+        const owner = getCurrentVoiceOwner();
+        setPlayerTranscript(owner, interimTranscript);
+        setSpeechStatus("聞き取り中");
+        if (
+          triggerVoiceTextAttack(interimTranscript) ||
+          wasRecentlyUsedForVoiceAttack(interimTranscript)
+        ) {
+          clearPlayerTranscriptSoon(owner, interimTranscript);
+        }
+      }
+    };
+
+    recognition.onerror = (event) => {
+      const error = event.error ?? "unknown";
+
+      if (
+        error === "not-allowed" ||
+        error === "service-not-allowed"
+      ) {
+        recognitionShouldRunRef.current = false;
+        setSpeechListening(false);
+        setStatus("音声認識の利用が許可されていません");
+        setSpeechStatus("音声認識が許可されていません");
+        return;
+      }
+
+      if (error === "no-speech") {
+        setSpeechStatus("声を待っています");
+        return;
+      }
+
+      setSpeechStatus(`音声認識エラー: ${error}`);
+    };
+
+    recognition.onend = () => {
+      setSpeechListening(false);
+
+      if (!recognitionShouldRunRef.current) {
+        return;
+      }
+
+      setSpeechStatus("聞き取りを再開中");
+
+      window.setTimeout(() => {
+        try {
+          recognition.start();
+          setSpeechListening(true);
+        } catch (error) {
+          console.error("音声認識の再開に失敗しました:", error);
+        }
+      }, 250);
+    };
+
+    recognitionRef.current = recognition;
+    recognitionShouldRunRef.current = true;
+    setSpeechSupported(true);
+
+    try {
+      recognition.start();
+      setSpeechStatus("聞き取りを開始しました");
+    } catch (error) {
+      console.error("音声認識の起動に失敗しました:", error);
+      setSpeechListening(false);
+      setSpeechStatus("音声認識を開始できませんでした");
+    }
+  };
+
+  const startMicMonitor = async (stream: MediaStream) => {
+    const audioTrack = stream.getAudioTracks()[0];
+
+    if (!audioTrack) {
+      setMicStarted(false);
+      setMicLevel(0);
+      return;
+    }
+
+    stopMicMonitor();
+
+    const audioContext = new AudioContext();
+    const analyser = audioContext.createAnalyser();
+    const source = audioContext.createMediaStreamSource(
+      new MediaStream([audioTrack]),
+    );
+
+    analyser.fftSize = 1024;
+    source.connect(analyser);
+
+    audioContextRef.current = audioContext;
+    audioAnalyserRef.current = analyser;
+    audioSourceRef.current = source;
+    audioDataRef.current = new Uint8Array(analyser.fftSize);
+
+    setMicStarted(true);
+    updateMicLevel();
+  };
+
   const startCamera = async () => {
     try {
-      setStatus("カメラを起動中...");
+      setStatus("カメラ・マイクを起動中...");
 
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -1511,7 +1986,11 @@ function App() {
             ideal: 720,
           },
         },
-        audio: false,
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
       });
 
       streamRef.current = stream;
@@ -1525,15 +2004,22 @@ function App() {
 
       await videoRef.current.play();
 
+      await startMicMonitor(stream);
+
+      startSpeechRecognition();
+
       setCameraStarted(true);
 
-      setStatus("カメラ起動完了。認識モデルを読み込み中...");
+      setStatus("カメラ・マイク起動完了。認識モデルを読み込み中...");
 
       initializeModels();
     } catch (error) {
       console.error(error);
 
-      setStatus("カメラを起動できませんでした");
+      stopSpeechRecognition();
+      setMicStarted(false);
+      setMicLevel(0);
+      setStatus("カメラまたはマイクを起動できませんでした");
     }
   };
 
@@ -1775,6 +2261,90 @@ function App() {
     );
   };
 
+  const triggerVoiceTextAttack = (text: string): PlayerId | null => {
+    if (battleWinner) {
+      return null;
+    }
+
+    const trimmedText = text.trim().replace(/\s+/g, " ");
+    const target = latestVoiceAttackTargetRef.current;
+    const now = performance.now();
+    const textLooksLikeSameUtterance =
+      lastVoiceAttackTextRef.current !== "" &&
+      (trimmedText.startsWith(lastVoiceAttackTextRef.current) ||
+        lastVoiceAttackTextRef.current.startsWith(trimmedText));
+
+    if (
+      !trimmedText ||
+      !target ||
+      (textLooksLikeSameUtterance &&
+        now - lastVoiceAttackAtRef.current < 1200) ||
+      now - lastVoiceAttackAtRef.current < VOICE_ATTACK_COOLDOWN
+    ) {
+      return null;
+    }
+
+    const levelRatio = Math.min(1, Math.max(0.18, micLevelRef.current / 100));
+    const attack = recordAttack("voice", target.owner, target.target, now);
+    const fontSize = Math.round(28 + levelRatio * 52);
+    const totalDamage =
+      VOICE_ATTACK_BASE_DAMAGE +
+      Math.round(levelRatio * 14) +
+      Math.min(8, Math.ceil(trimmedText.length / 3));
+    const letters = Array.from(trimmedText.replace(/\s+/g, "")).slice(0, 14);
+    const direction = getNormalizedDirection(target.start, target.targetCenter);
+    const perpendicular = {
+      x: -direction.y,
+      y: direction.x,
+    };
+    const characterDamage = Math.max(
+      1,
+      Math.ceil(totalDamage / Math.max(1, letters.length)),
+    );
+
+    voiceTextAttacksRef.current = [
+      ...voiceTextAttacksRef.current,
+      ...letters.map((letter, index) => {
+        const spread = (index - (letters.length - 1) / 2) * 0.028;
+        const seed = Math.random() * 1000;
+        const startX = target.start.x + perpendicular.x * spread;
+        const startY = target.start.y + perpendicular.y * spread;
+        const initialSpeed = 0.00016 + levelRatio * 0.00016;
+
+        return {
+          text: letter,
+          x: startX,
+          y: startY,
+          vx:
+            direction.x * initialSpeed +
+            perpendicular.x * Math.sin(seed) * 0.0001,
+          vy:
+            direction.y * initialSpeed +
+            perpendicular.y * Math.cos(seed) * 0.0001,
+          startX,
+          startY,
+          targetX: target.targetCenter.x,
+          targetY: target.targetCenter.y,
+          fontSize: Math.round(fontSize * (0.86 + (index % 3) * 0.08)),
+          radius: 0.035 + levelRatio * 0.06,
+          damage: characterDamage,
+          delay: index * 52,
+          seed,
+          life: VOICE_ATTACK_LIFE + index * 52,
+          maxLife: VOICE_ATTACK_LIFE + index * 52,
+          owner: target.owner,
+          target: target.target,
+          attackId: attack.id,
+          color: getPlayerColor(target.owner),
+        };
+      }),
+    ].slice(-36);
+
+    lastVoiceAttackAtRef.current = now;
+    lastVoiceAttackTextRef.current = trimmedText;
+    return target.owner;
+  };
+
   const triggerThunderAttack = (
     attacker: BattlePlayer,
     defender: BattlePlayer,
@@ -1876,6 +2446,120 @@ function App() {
 
       return next;
     });
+  };
+
+  const updateVoiceTextAttacks = (
+    time: number,
+    battlePlayers: BattlePlayer[],
+    frameDelta: number,
+  ) => {
+    const hitVoiceAttacks = new Set<number>();
+
+    voiceTextAttacksRef.current = voiceTextAttacksRef.current
+      .map((attack) => {
+        if (attack.delay > 0) {
+          return {
+            ...attack,
+            delay: attack.delay - frameDelta,
+          };
+        }
+
+        const defender = battlePlayers.find(
+          (player) => player.id === attack.target,
+        );
+        const nextLife = attack.life - frameDelta;
+        const targetX = defender?.center.x ?? attack.targetX;
+        const targetY = defender?.center.y ?? attack.targetY;
+        const toTargetX = targetX - attack.x;
+        const toTargetY = targetY - attack.y;
+        const targetDistance = Math.hypot(toTargetX, toTargetY);
+        const direction =
+          targetDistance > 0.001
+            ? {
+                x: toTargetX / targetDistance,
+                y: toTargetY / targetDistance,
+              }
+            : {
+                x: 0,
+                y: 0,
+              };
+        const desiredSpeed = 0.00034 + (attack.fontSize / 100) * 0.00015;
+        const steer = Math.min(0.22, frameDelta / 120);
+        const nextVx =
+          attack.vx + (direction.x * desiredSpeed - attack.vx) * steer;
+        const nextVy =
+          attack.vy + (direction.y * desiredSpeed - attack.vy) * steer;
+        const wobble =
+          Math.sin(time / 70 + attack.seed) *
+          Math.min(0.00022, desiredSpeed * 0.36);
+        const nextX = attack.x + (nextVx + -direction.y * wobble) * frameDelta;
+        const nextY = attack.y + (nextVy + direction.x * wobble) * frameDelta;
+
+        return {
+          ...attack,
+          x: nextX,
+          y: nextY,
+          vx: nextVx,
+          vy: nextVy,
+          targetX,
+          targetY,
+          life: nextLife,
+        };
+      })
+      .filter(
+        (attack) =>
+          (attack.life > 0 || attack.delay > 0) &&
+          attack.x > -0.35 &&
+          attack.x < 1.35 &&
+          attack.y > -0.35 &&
+          attack.y < 1.35,
+      );
+
+    voiceTextAttacksRef.current.forEach((attack, attackIndex) => {
+      if (attack.delay > 0) {
+        return;
+      }
+
+      const defender = battlePlayers.find(
+        (player) => player.id === attack.target,
+      );
+
+      if (!defender) {
+        return;
+      }
+
+      const hit = isCircleCollidingWithTarget(
+        {
+          x: attack.x,
+          y: attack.y,
+          z: 0,
+        },
+        attack.radius,
+        defender.center,
+        defender.radius,
+      );
+
+      if (!hit) {
+        return;
+      }
+
+      hitVoiceAttacks.add(attackIndex);
+      markAttackHit(attack.attackId, time);
+
+      applyBattleDamage(
+        defender.id,
+        attack.damage,
+        defender.center.x,
+        defender.center.y,
+        attack.color,
+      );
+    });
+
+    if (hitVoiceAttacks.size > 0) {
+      voiceTextAttacksRef.current = voiceTextAttacksRef.current.filter(
+        (_, index) => !hitVoiceAttacks.has(index),
+      );
+    }
   };
 
   const updatePunchFireballs = (
@@ -2153,6 +2837,12 @@ function App() {
 
       // eslint-disable-next-line react-hooks/purity
       const now = performance.now();
+      const frameDelta =
+        detectionPreviousTimeRef.current > 0
+          ? Math.min(50, now - detectionPreviousTimeRef.current)
+          : 16;
+
+      detectionPreviousTimeRef.current = now;
 
       // 手
       const handResult = handLandmarker.detectForVideo(video, now);
@@ -2176,12 +2866,35 @@ function App() {
         faceAttackStates,
       );
 
+      const voiceAttacker =
+        battlePlayers.find((player) => player.attack.mouthOpen) ??
+        battlePlayers[0];
+      const voiceDefender = voiceAttacker
+        ? getOpponent(voiceAttacker, battlePlayers)
+        : undefined;
+      const voiceStart = voiceAttacker
+        ? getMouthCenter(voiceAttacker.face)
+        : null;
+
+      latestVoiceAttackTargetRef.current =
+        voiceAttacker && voiceDefender && voiceStart
+          ? {
+              owner: voiceAttacker.id,
+              target: voiceDefender.id,
+              start: voiceStart,
+              targetCenter: voiceDefender.center,
+              targetRadius: voiceDefender.radius,
+            }
+          : null;
+
       const handAssignments = assignHandsToPlayers(
         handResult.landmarks,
         battlePlayers,
       );
 
       updatePunchFireballs(now, handAssignments, battlePlayers);
+
+      updateVoiceTextAttacks(now, battlePlayers, frameDelta);
 
       const thunderChargingPlayers = new Set<PlayerId>();
       const healChargingPlayers = new Set<PlayerId>();
@@ -2519,6 +3232,8 @@ function App() {
 
     drawFireballs(ctx, canvas, fireballs, time);
 
+    drawVoiceTextAttacks(ctx, canvas, voiceTextAttacksRef.current, time);
+
     drawHitEffects(ctx, canvas, hitEffectsRef.current);
 
     drawHealEffects(ctx, canvas, healEffectsRef.current);
@@ -2665,13 +3380,17 @@ function App() {
 
       streamRef.current?.getTracks().forEach((track) => track.stop());
 
+      stopSpeechRecognition();
+
+      stopMicMonitor();
+
       handLandmarkerRef.current?.close();
 
       poseLandmarkerRef.current?.close();
 
       faceLandmarkerRef.current?.close();
     };
-  }, []);
+  }, [stopMicMonitor, stopSpeechRecognition]);
 
   return (
     <div className="app">
@@ -2728,9 +3447,9 @@ function App() {
               <div className="start">
                 <h2>全身を構えろ</h2>
 
-                <p>手・指・顔・全身を認識</p>
+                <p>手・指・顔・全身・音声を認識</p>
 
-                <button onClick={startCamera}>カメラを起動</button>
+                <button onClick={startCamera}>カメラ・マイクを起動</button>
               </div>
             )}
 
@@ -2818,6 +3537,53 @@ function App() {
               <span>MOUTH</span>
 
               <strong>{mouthOpen ? "OPEN" : "CLOSED"}</strong>
+            </div>
+
+            <div className={micStarted ? "mic-panel active" : "mic-panel"}>
+              <span>MIC</span>
+
+              <strong>{micStarted ? `${micLevel}%` : "OFF"}</strong>
+
+              <div className="mic-meter" aria-hidden="true">
+                <b style={{ width: `${micLevel}%` }} />
+              </div>
+            </div>
+
+            <div
+              className={
+                speechListening ? "speech-panel active" : "speech-panel"
+              }
+            >
+              <span>SPEECH</span>
+
+              <strong>
+                {!speechSupported ? "NO" : speechListening ? "ON" : "OFF"}
+              </strong>
+            </div>
+          </div>
+
+          <div className="voice-transcripts">
+            <div className="voice-transcript player1-voice">
+              <span>P1 VOICE</span>
+              <strong>{voiceTranscripts.player1 || "..."}</strong>
+            </div>
+
+            <div className="voice-transcript player2-voice">
+              <span>P2 VOICE</span>
+              <strong>{voiceTranscripts.player2 || "..."}</strong>
+            </div>
+
+            <div className="speech-control">
+              <small>{speechStatus}</small>
+              {cameraStarted && speechSupported && !speechListening && (
+                <button
+                  type="button"
+                  className="speech-start-button"
+                  onClick={startSpeechRecognition}
+                >
+                  音声認識を開始
+                </button>
+              )}
             </div>
           </div>
 
