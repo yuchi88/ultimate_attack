@@ -46,6 +46,15 @@ type HitEffect = {
   target: PlayerId;
 };
 
+type HealEffect = {
+  x: number;
+  y: number;
+  life: number;
+  maxLife: number;
+  target: PlayerId;
+  amount: number;
+};
+
 type LightningEffect = {
   x: number;
   y: number;
@@ -80,13 +89,17 @@ const DAMAGE_FLASH_TIME = 650;
 const BEAM_TARGET_RADIUS_MIN = 0.075;
 const BEAM_TARGET_RADIUS_SCALE = 0.52;
 const FIREBALL_DAMAGE = 12;
-const SHOCKWAVE_DAMAGE = 7;
+const SHOCKWAVE_DAMAGE = 3;
 const SHOCKWAVE_HIT_RADIUS = 0.16;
 const THUNDER_DAMAGE = 32;
 const THUNDER_CHARGE_TIME = 1100;
-const THUNDER_COOLDOWN = 4200;
+const THUNDER_COOLDOWN = 5500;
 const THUNDER_HAND_DISTANCE = 0.18;
 const THUNDER_ABOVE_HEAD_MARGIN = 0.08;
+const HEAL_AMOUNT = 16;
+const HEAL_CHARGE_TIME = 900;
+const HEAL_COOLDOWN = 2800;
+const MAX_HP = 300;
 
 type BattleWinner = "PLAYER 1" | "PLAYER 2";
 
@@ -111,6 +124,8 @@ type PlayerMarker = {
   handCount: number;
   chargingThunder: boolean;
   thunderProgress: number;
+  chargingHeal: boolean;
+  healProgress: number;
 };
 
 type HandAssignment = {
@@ -124,7 +139,8 @@ type AttackRecord = {
     | "beam"
     | "fireball"
     | "shockwave"
-    | "thunder";
+    | "thunder"
+    | "heal";
   owner: PlayerId;
   target: PlayerId | null;
   startedAt: number;
@@ -495,6 +511,87 @@ function isOpenHand(
     }).length;
 
   return extendedCount >= 3;
+}
+
+function isFingerExtended(
+  hand: Point[],
+  tipIndex: number,
+  pipIndex: number
+) {
+  const wrist = hand[0];
+  const palmCenter =
+    getPalmCenter(hand);
+  const tip = hand[tipIndex];
+  const pip = hand[pipIndex];
+
+  if (
+    !wrist ||
+    !palmCenter ||
+    !tip ||
+    !pip
+  ) {
+    return false;
+  }
+
+  return (
+    distance(wrist, tip) >
+      distance(wrist, pip) * 1.16 &&
+    distance(palmCenter, tip) >
+      distance(palmCenter, pip) * 1.08
+  );
+}
+
+function isFingerFolded(
+  hand: Point[],
+  tipIndex: number,
+  baseIndex: number
+) {
+  const palmCenter =
+    getPalmCenter(hand);
+  const tip = hand[tipIndex];
+  const base = hand[baseIndex];
+
+  if (!palmCenter || !tip || !base) {
+    return false;
+  }
+
+  return (
+    distance(palmCenter, tip) <
+    Math.max(
+      0.11,
+      distance(palmCenter, base) * 2.25
+    )
+  );
+}
+
+function isPeaceHand(
+  hand: Point[]
+) {
+  const indexExtended =
+    isFingerExtended(hand, 8, 6);
+  const middleExtended =
+    isFingerExtended(hand, 12, 10);
+  const ringFolded =
+    isFingerFolded(hand, 16, 13);
+  const pinkyFolded =
+    isFingerFolded(hand, 20, 17);
+  const indexTip = hand[8];
+  const middleTip = hand[12];
+
+  if (!indexTip || !middleTip) {
+    return false;
+  }
+
+  const tipsSeparated =
+    distance(indexTip, middleTip) > 0.035;
+
+  return (
+    indexExtended &&
+    middleExtended &&
+    ringFolded &&
+    pinkyFolded &&
+    tipsSeparated
+  );
 }
 
 function getHandShockwaveData(
@@ -1393,6 +1490,58 @@ function drawHitEffects(
   });
 }
 
+function drawHealEffects(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  effects: HealEffect[]
+) {
+  effects.forEach((effect) => {
+    const alpha =
+      effect.life / effect.maxLife;
+    const x = effect.x * canvas.width;
+    const y = effect.y * canvas.height;
+    const radius =
+      (0.1 + (1 - alpha) * 0.14) *
+      Math.min(
+        canvas.width,
+        canvas.height
+      );
+
+    ctx.save();
+    ctx.globalCompositeOperation =
+      "lighter";
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle =
+      "rgba(88, 255, 154, 0.95)";
+    ctx.fillStyle =
+      "rgba(88, 255, 154, 0.18)";
+    ctx.lineWidth = 6;
+    ctx.shadowColor =
+      "rgba(88, 255, 154, 0.95)";
+    ctx.shadowBlur = 24;
+    ctx.beginPath();
+    ctx.arc(
+      x,
+      y,
+      radius,
+      0,
+      Math.PI * 2
+    );
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.font = "700 28px Arial";
+    ctx.textAlign = "center";
+    ctx.fillStyle = "white";
+    ctx.fillText(
+      `+${effect.amount}`,
+      x,
+      y - radius * 0.25
+    );
+    ctx.restore();
+  });
+}
+
 function drawLightningEffects(
   ctx: CanvasRenderingContext2D,
   canvas: HTMLCanvasElement,
@@ -2067,6 +2216,9 @@ function App() {
   const hitEffectsRef =
     useRef<HitEffect[]>([]);
 
+  const healEffectsRef =
+    useRef<HealEffect[]>([]);
+
   const lightningEffectsRef =
     useRef<LightningEffect[]>([]);
 
@@ -2109,11 +2261,23 @@ function App() {
       player2: 0,
     });
 
+  const healChargeStartedRef =
+    useRef<Record<PlayerId, number | null>>({
+      player1: null,
+      player2: null,
+    });
+
+  const healCooldownUntilRef =
+    useRef<Record<PlayerId, number>>({
+      player1: 0,
+      player2: 0,
+    });
+
   const [playerHP, setPlayerHP] =
-    useState(100);
+    useState(MAX_HP);
 
   const [player2HP, setPlayer2HP] =
-    useState(100);
+    useState(MAX_HP);
 
   const [battleWinner, setBattleWinner] =
     useState<BattleWinner | null>(null);
@@ -2163,12 +2327,16 @@ function App() {
   const [maxHands, setMaxHands] =
     useState(4);
 
+  const [showJointGuides, setShowJointGuides] =
+    useState(true);
+
   const [status, setStatus] =
     useState("カメラを起動してください");
 
   const applySettings = (
     nextMaxPlayers: number,
-    nextMaxHands: number
+    nextMaxHands: number,
+    nextShowJointGuides = showJointGuides
   ) => {
     const safeMaxPlayers =
       Math.min(4, Math.max(2, nextMaxPlayers));
@@ -2177,6 +2345,9 @@ function App() {
 
     setMaxPlayers(safeMaxPlayers);
     setMaxHands(safeMaxHands);
+    setShowJointGuides(
+      nextShowJointGuides
+    );
 
     localStorage.setItem(
       "ultimate_max_players",
@@ -2185,6 +2356,10 @@ function App() {
     localStorage.setItem(
       "ultimate_max_hands",
       String(safeMaxHands)
+    );
+    localStorage.setItem(
+      "ultimate_show_joint_guides",
+      String(nextShowJointGuides)
     );
 
     if (cameraStarted) {
@@ -2196,8 +2371,8 @@ function App() {
   };
 
   const resetBattleState = () => {
-    setPlayerHP(100);
-    setPlayer2HP(100);
+    setPlayerHP(MAX_HP);
+    setPlayer2HP(MAX_HP);
     setBattleWinner(null);
     battleStartedRef.current = false;
     lastBeamDamageRef.current = {
@@ -2216,12 +2391,21 @@ function App() {
     nextAttackIdRef.current = 1;
     fireballsRef.current = [];
     hitEffectsRef.current = [];
+    healEffectsRef.current = [];
     lightningEffectsRef.current = [];
     thunderChargeStartedRef.current = {
       player1: null,
       player2: null,
     };
     thunderCooldownUntilRef.current = {
+      player1: 0,
+      player2: 0,
+    };
+    healChargeStartedRef.current = {
+      player1: null,
+      player2: null,
+    };
+    healCooldownUntilRef.current = {
       player1: 0,
       player2: 0,
     };
@@ -2236,6 +2420,10 @@ function App() {
     const storedHands =
       localStorage.getItem(
         "ultimate_max_hands"
+      );
+    const storedShowJointGuides =
+      localStorage.getItem(
+        "ultimate_show_joint_guides"
       );
 
     setMaxPlayers(
@@ -2253,6 +2441,11 @@ function App() {
             Math.max(4, Number(storedHands))
           )
         : 4
+    );
+    setShowJointGuides(
+      storedShowJointGuides === null
+        ? true
+        : storedShowJointGuides === "true"
     );
   }, []);
 
@@ -2510,6 +2703,23 @@ function App() {
     ].slice(-6);
   };
 
+  const spawnHealEffect = (
+    target: BattlePlayer,
+    amount: number
+  ) => {
+    healEffectsRef.current = [
+      ...healEffectsRef.current,
+      {
+        x: target.center.x,
+        y: target.center.y,
+        life: 760,
+        maxLife: 760,
+        target: target.id,
+        amount,
+      },
+    ].slice(-6);
+  };
+
   const recordAttack = (
     type: AttackRecord["type"],
     owner: PlayerId,
@@ -2597,6 +2807,58 @@ function App() {
       time + THUNDER_COOLDOWN;
     thunderChargeStartedRef.current[
       attacker.id
+    ] = null;
+  };
+
+  const applyHeal = (
+    player: BattlePlayer,
+    amount: number
+  ) => {
+    if (battleWinner) {
+      return;
+    }
+
+    if (player.id === "player1") {
+      setPlayerHP((current) =>
+        Math.min(MAX_HP, current + amount)
+      );
+    } else {
+      setPlayer2HP((current) =>
+        Math.min(MAX_HP, current + amount)
+      );
+    }
+
+    spawnHealEffect(player, amount);
+  };
+
+  const triggerHeal = (
+    player: BattlePlayer,
+    time: number
+  ) => {
+    const attack =
+      recordAttack(
+        "heal",
+        player.id,
+        player.id,
+        time
+      );
+
+    markAttackHit(
+      attack.id,
+      time
+    );
+
+    applyHeal(
+      player,
+      HEAL_AMOUNT
+    );
+
+    healCooldownUntilRef.current[
+      player.id
+    ] =
+      time + HEAL_COOLDOWN;
+    healChargeStartedRef.current[
+      player.id
     ] = null;
   };
 
@@ -3217,9 +3479,61 @@ function App() {
 
       const thunderChargingPlayers =
         new Set<PlayerId>();
+      const healChargingPlayers =
+        new Set<PlayerId>();
 
       handAssignments.forEach(
         (assignment) => {
+          const healing =
+            assignment.hands.some(
+              isPeaceHand
+            );
+
+          if (
+            !healing ||
+            now <
+              healCooldownUntilRef.current[
+                assignment.player.id
+              ]
+          ) {
+            healChargeStartedRef.current[
+              assignment.player.id
+            ] = null;
+          } else {
+            healChargingPlayers.add(
+              assignment.player.id
+            );
+
+            if (
+              healChargeStartedRef.current[
+                assignment.player.id
+              ] === null
+            ) {
+              healChargeStartedRef.current[
+                assignment.player.id
+              ] = now;
+            }
+
+            const healStarted =
+              healChargeStartedRef.current[
+                assignment.player.id
+              ];
+
+            if (
+              healStarted !== null &&
+              now - healStarted >=
+                HEAL_CHARGE_TIME
+            ) {
+              triggerHeal(
+                assignment.player,
+                now
+              );
+              healChargingPlayers.delete(
+                assignment.player.id
+              );
+            }
+          }
+
           const charging =
             isThunderPrayerPose(
               assignment
@@ -3300,6 +3614,10 @@ function App() {
             thunderChargeStartedRef.current[
               player.id
             ];
+          const healStarted =
+            healChargeStartedRef.current[
+              player.id
+            ];
 
           return {
             handCount:
@@ -3323,6 +3641,9 @@ function App() {
               player.attack.beamActive ||
               thunderChargingPlayers.has(
                 player.id
+              ) ||
+              healChargingPlayers.has(
+                player.id
               ),
             chargingThunder:
               thunderChargingPlayers.has(
@@ -3335,6 +3656,18 @@ function App() {
                     1,
                     (now - thunderStarted) /
                       THUNDER_CHARGE_TIME
+                  ),
+            chargingHeal:
+              healChargingPlayers.has(
+                player.id
+              ),
+            healProgress:
+              healStarted === null
+                ? 0
+                : Math.min(
+                    1,
+                    (now - healStarted) /
+                      HEAL_CHARGE_TIME
                   ),
           };
         })
@@ -3369,6 +3702,14 @@ function App() {
 
       lightningEffectsRef.current =
         lightningEffectsRef.current
+          .map((effect) => ({
+            ...effect,
+            life: effect.life - 16,
+          }))
+          .filter((effect) => effect.life > 0);
+
+      healEffectsRef.current =
+        healEffectsRef.current
           .map((effect) => ({
             ...effect,
             life: effect.life - 16,
@@ -3518,7 +3859,8 @@ function App() {
         handAssignments,
         battlePlayers,
         fireballsRef.current,
-        now
+        now,
+        showJointGuides
       );
     }
 
@@ -3540,7 +3882,8 @@ function App() {
     handAssignments: HandAssignment[],
     battlePlayers: BattlePlayer[],
     fireballs: Fireball[],
-    time: number
+    time: number,
+    showGuides: boolean
   ) => {
     const canvas =
       canvasRef.current;
@@ -3572,12 +3915,13 @@ function App() {
       canvas.height
     );
 
-    // ----------------------------
-    // 全身
-    // ----------------------------
+    if (showGuides) {
+      // ----------------------------
+      // 全身
+      // ----------------------------
 
-    poses.forEach(
-      (pose) => {
+      poses.forEach(
+        (pose) => {
         ctx.strokeStyle =
           "#00aaff";
 
@@ -3657,8 +4001,9 @@ function App() {
             ctx.fill();
           }
         );
-      }
-    );
+        }
+      );
+    }
 
     // ----------------------------
     // 手・指
@@ -3685,6 +4030,12 @@ function App() {
       ctx,
       canvas,
       hitEffectsRef.current
+    );
+
+    drawHealEffects(
+      ctx,
+      canvas,
+      healEffectsRef.current
     );
 
     drawLightningEffects(
@@ -3724,8 +4075,9 @@ function App() {
       [13, 17],
     ];
 
-    hands.forEach(
-      (hand, handIndex) => {
+    if (showGuides) {
+      hands.forEach(
+        (hand, handIndex) => {
         const color =
           handIndex === 0
             ? "#00ff88"
@@ -3794,8 +4146,9 @@ function App() {
             ctx.fill();
           }
         );
-      }
-    );
+        }
+      );
+    }
 
     // ----------------------------
     // 顔・口
@@ -3836,33 +4189,35 @@ function App() {
           );
         }
 
-        ctx.fillStyle =
-          "#ffff00";
+        if (showGuides) {
+          ctx.fillStyle =
+            "#ffff00";
 
-        MOUTH_POINTS.forEach(
-          (index) => {
-            const point =
-              face[index];
+          MOUTH_POINTS.forEach(
+            (index) => {
+              const point =
+                face[index];
 
-            if (!point) {
-              return;
+              if (!point) {
+                return;
+              }
+
+              ctx.beginPath();
+
+              ctx.arc(
+                point.x *
+                  canvas.width,
+                point.y *
+                  canvas.height,
+                3,
+                0,
+                Math.PI * 2
+              );
+
+              ctx.fill();
             }
-
-            ctx.beginPath();
-
-            ctx.arc(
-              point.x *
-                canvas.width,
-              point.y *
-                canvas.height,
-              3,
-              0,
-              Math.PI * 2
-            );
-
-            ctx.fill();
-          }
-        );
+          );
+        }
       }
     );
   };
@@ -3956,6 +4311,29 @@ function App() {
                 <option value={7}>7手</option>
                 <option value={8}>8手</option>
               </select>
+            </div>
+
+            <div className="settings-item">
+              <label>
+                関節ガイド表示
+              </label>
+              <button
+                type="button"
+                className={
+                  showJointGuides
+                    ? "toggle active"
+                    : "toggle"
+                }
+                onClick={() => {
+                  applySettings(
+                    maxPlayers,
+                    maxHands,
+                    !showJointGuides
+                  );
+                }}
+              >
+                {showJointGuides ? "ON" : "OFF"}
+              </button>
             </div>
 
             <div className="settings-footer">
@@ -4085,16 +4463,27 @@ function App() {
                 {getPlayerLabel(marker.id)}
               </span>
               <small>
-                {marker.chargingThunder
+                {marker.chargingHeal
+                  ? "HEAL"
+                  : marker.chargingThunder
                   ? "THUNDER"
                   : `${marker.handCount} HANDS`}
               </small>
-              {marker.chargingThunder && (
-                <div className="thunder-charge">
+              {(marker.chargingThunder ||
+                marker.chargingHeal) && (
+                <div
+                  className={
+                    marker.chargingHeal
+                      ? "heal-charge"
+                      : "thunder-charge"
+                  }
+                >
                   <b
                     style={{
                       width: `${
-                        marker.thunderProgress *
+                        (marker.chargingHeal
+                          ? marker.healProgress
+                          : marker.thunderProgress) *
                         100
                       }%`,
                     }}

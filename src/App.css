@@ -242,7 +242,8 @@ button {
   opacity: 0.95;
 }
 
-.thunder-charge {
+.thunder-charge,
+.heal-charge {
   position: relative;
   width: 96px;
   height: 8px;
@@ -253,7 +254,8 @@ button {
   box-shadow: 0 0 16px rgba(88, 214, 255, 0.65);
 }
 
-.thunder-charge b {
+.thunder-charge b,
+.heal-charge b {
   display: block;
   height: 100%;
   border-radius: inherit;
@@ -263,6 +265,20 @@ button {
     #ffffff
   );
   box-shadow: 0 0 18px rgba(255, 255, 255, 0.95);
+}
+
+.heal-charge {
+  border-color: rgba(126, 255, 177, 0.95);
+  box-shadow: 0 0 16px rgba(88, 255, 154, 0.7);
+}
+
+.heal-charge b {
+  background: linear-gradient(
+    90deg,
+    #58ff9a,
+    #ffffff
+  );
+  box-shadow: 0 0 18px rgba(88, 255, 154, 0.95);
 }
 
 .player-marker.damaged::before {
