@@ -84,6 +84,14 @@ type HealEffect = {
   amount: number;
 };
 
+type DefenseEffect = {
+  x: number;
+  y: number;
+  life: number;
+  maxLife: number;
+  target: PlayerId;
+};
+
 type LightningEffect = {
   x: number;
   y: number;
@@ -137,6 +145,9 @@ const VOICE_SOUND_END_LEVEL = 3;
 const VOICE_SILENCE_RESET_TIME = 720;
 const VOICE_MOUTH_ACTIVITY_DECAY = 0.9;
 const VOICE_MOUTH_ACTIVITY_WEIGHT = 18;
+const DEFENSE_DAMAGE = 1;
+const DEFENSE_MIN_HAND_SIZE = 0.045;
+const DEFENSE_MAX_PALM_Z_SPREAD = 0.09;
 const MAX_HP = 300;
 
 type BattleWinner = "PLAYER 1" | "PLAYER 2";
@@ -162,11 +173,18 @@ type PlayerMarker = {
   thunderProgress: number;
   chargingHeal: boolean;
   healProgress: number;
+  defending: boolean;
 };
 
 type HandAssignment = {
   player: BattlePlayer;
   hands: Point[][];
+};
+
+type DefenseState = {
+  playerId: PlayerId;
+  center: Point;
+  radius: number;
 };
 
 type AttackRecord = {
@@ -446,6 +464,80 @@ function isOpenHand(hand: Point[]) {
   }).length;
 
   return extendedCount >= 3;
+}
+
+function isDefenseOpenHand(hand: Point[]) {
+  const wrist = hand[0];
+  const palmCenter = getPalmCenter(hand);
+
+  if (!wrist || !palmCenter) {
+    return false;
+  }
+
+  const extendedCount = [
+    [8, 6],
+    [12, 10],
+    [16, 14],
+    [20, 18],
+  ].filter(([tipIndex, pipIndex]) => {
+    const tip = hand[tipIndex];
+    const pip = hand[pipIndex];
+
+    if (!tip || !pip) {
+      return false;
+    }
+
+    return (
+      distance(wrist, tip) > distance(wrist, pip) * 1.08 &&
+      distance(palmCenter, tip) > distance(palmCenter, pip) * 1.01
+    );
+  }).length;
+
+  return extendedCount >= 2;
+}
+
+function isOpenPalmFacingCamera(hand: Point[]) {
+  const palmCenter = getPalmCenter(hand);
+  const wrist = hand[0];
+
+  if (!palmCenter || !wrist || !isDefenseOpenHand(hand)) {
+    return false;
+  }
+
+  const handSize = getHandSize(hand);
+
+  if (handSize < DEFENSE_MIN_HAND_SIZE) {
+    return false;
+  }
+
+  const palmPoints = [hand[0], hand[5], hand[9], hand[13], hand[17]].filter(
+    (point): point is Point => point !== undefined,
+  );
+  const palmZValues = palmPoints.map((point) => point.z);
+  const palmZSpread = Math.max(...palmZValues) - Math.min(...palmZValues);
+  const fingerCenter = getFingerCenter(hand);
+
+  if (!fingerCenter) {
+    return false;
+  }
+
+  const tips = OPEN_HAND_TIPS.map((index) => hand[index]).filter(
+    (point): point is Point => point !== undefined,
+  );
+  const tipSpread = Math.max(
+    ...tips.map((tip, index) =>
+      tips
+        .slice(index + 1)
+        .reduce((largest, otherTip) => Math.max(largest, distance(tip, otherTip)), 0),
+    ),
+  );
+
+  const fingersRaisedFromWrist = distance(wrist, fingerCenter) > handSize * 0.65;
+  const palmLooksFlat =
+    palmZSpread < Math.max(DEFENSE_MAX_PALM_Z_SPREAD, handSize * 0.75);
+  const fingersSpread = tipSpread > handSize * 0.5;
+
+  return fingersRaisedFromWrist && palmLooksFlat && fingersSpread;
 }
 
 function isFingerExtended(hand: Point[], tipIndex: number, pipIndex: number) {
@@ -1075,6 +1167,124 @@ function drawHealEffects(
   });
 }
 
+function drawDefenseShields(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  defenses: DefenseState[],
+  time: number,
+) {
+  defenses.forEach((defense, index) => {
+    const x = defense.center.x * canvas.width;
+    const y = defense.center.y * canvas.height;
+    const radius = defense.radius * Math.min(canvas.width, canvas.height);
+    const pulse = 0.5 + Math.sin(time / 110 + index * 1.7) * 0.5;
+
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.lineCap = "round";
+    ctx.shadowColor = "rgba(105, 245, 255, 0.95)";
+    ctx.shadowBlur = 24 + pulse * 18;
+
+    const gradient = ctx.createRadialGradient(
+      x,
+      y,
+      radius * 0.15,
+      x,
+      y,
+      radius * 1.12,
+    );
+
+    gradient.addColorStop(0, "rgba(255, 255, 255, 0.28)");
+    gradient.addColorStop(0.42, "rgba(102, 245, 255, 0.2)");
+    gradient.addColorStop(1, "rgba(63, 120, 255, 0)");
+
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(x, y, radius * 1.12, 0, Math.PI * 2);
+    ctx.fill();
+
+    for (let ring = 0; ring < 3; ring += 1) {
+      const ringProgress = (time / 720 + ring / 3) % 1;
+      const ringRadius = radius * (0.62 + ringProgress * 0.38);
+      const alpha = 0.72 * (1 - ringProgress);
+
+      ctx.strokeStyle = `rgba(190, 255, 255, ${alpha})`;
+      ctx.lineWidth = 5 - ringProgress * 2.5;
+      ctx.beginPath();
+      ctx.arc(x, y, ringRadius, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.92)";
+    ctx.lineWidth = 5 + pulse * 2;
+    ctx.beginPath();
+    ctx.arc(x, y, radius * 0.88, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.strokeStyle = "rgba(82, 214, 255, 0.78)";
+    ctx.lineWidth = 3;
+
+    for (let spoke = 0; spoke < 8; spoke += 1) {
+      const angle = time / 520 + spoke * (Math.PI / 4);
+      const inner = radius * 0.28;
+      const outer = radius * (0.84 + pulse * 0.04);
+
+      ctx.beginPath();
+      ctx.moveTo(x + Math.cos(angle) * inner, y + Math.sin(angle) * inner);
+      ctx.lineTo(x + Math.cos(angle) * outer, y + Math.sin(angle) * outer);
+      ctx.stroke();
+    }
+
+    ctx.font = `900 ${Math.max(18, radius * 0.22)}px Arial, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "rgba(255, 255, 255, 0.96)";
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.88)";
+    ctx.lineWidth = 6;
+    ctx.strokeText("GUARD", x, y);
+    ctx.fillText("GUARD", x, y);
+
+    ctx.restore();
+  });
+}
+
+function drawDefenseEffects(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  effects: DefenseEffect[],
+) {
+  effects.forEach((effect) => {
+    const alpha = effect.life / effect.maxLife;
+    const x = effect.x * canvas.width;
+    const y = effect.y * canvas.height;
+    const radius =
+      (0.08 + (1 - alpha) * 0.16) * Math.min(canvas.width, canvas.height);
+
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.globalAlpha = Math.min(1, alpha * 1.35);
+    ctx.strokeStyle = "rgba(185, 255, 255, 0.95)";
+    ctx.fillStyle = "rgba(86, 232, 255, 0.18)";
+    ctx.lineWidth = 7;
+    ctx.shadowColor = "rgba(102, 245, 255, 1)";
+    ctx.shadowBlur = 32;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.font = "900 30px Arial, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "white";
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.9)";
+    ctx.lineWidth = 5;
+    ctx.strokeText("BLOCK -1", x, y - radius * 0.15);
+    ctx.fillText("BLOCK -1", x, y - radius * 0.15);
+    ctx.restore();
+  });
+}
+
 function drawLightningEffects(
   ctx: CanvasRenderingContext2D,
   canvas: HTMLCanvasElement,
@@ -1490,6 +1700,39 @@ function assignHandsToPlayers(
   return assignments;
 }
 
+function getDefenseStates(assignments: HandAssignment[]): DefenseState[] {
+  return assignments
+    .map((assignment) => {
+      if (getHandShockwaveData(assignment.hands)) {
+        return null;
+      }
+
+      const defendingHands = assignment.hands.filter(isOpenPalmFacingCamera);
+
+      if (defendingHands.length === 0) {
+        return null;
+      }
+
+      const centers = defendingHands
+        .map(getPalmCenter)
+        .filter((center): center is Point => center !== null);
+
+      if (centers.length === 0) {
+        return null;
+      }
+
+      const center = getAveragePoint(centers);
+      const largestHandSize = Math.max(...defendingHands.map(getHandSize));
+
+      return {
+        playerId: assignment.player.id,
+        center,
+        radius: Math.max(0.08, largestHandSize * 0.95),
+      };
+    })
+    .filter((state): state is DefenseState => state !== null);
+}
+
 function getBattleBeamTarget(
   attacker: BattlePlayer,
   defender: BattlePlayer,
@@ -1575,6 +1818,10 @@ function App() {
   const hitEffectsRef = useRef<HitEffect[]>([]);
 
   const healEffectsRef = useRef<HealEffect[]>([]);
+
+  const defenseEffectsRef = useRef<DefenseEffect[]>([]);
+
+  const defenseStatesRef = useRef<DefenseState[]>([]);
 
   const lightningEffectsRef = useRef<LightningEffect[]>([]);
 
@@ -1725,6 +1972,8 @@ function App() {
     voiceTextAttacksRef.current = [];
     hitEffectsRef.current = [];
     healEffectsRef.current = [];
+    defenseEffectsRef.current = [];
+    defenseStatesRef.current = [];
     lightningEffectsRef.current = [];
     thunderChargeStartedRef.current = {
       player1: null,
@@ -2334,6 +2583,27 @@ function App() {
     ].slice(-6);
   };
 
+  const spawnDefenseEffect = (
+    target: PlayerId,
+    hitX?: number,
+    hitY?: number,
+  ) => {
+    const defense = defenseStatesRef.current.find(
+      (state) => state.playerId === target,
+    );
+
+    defenseEffectsRef.current = [
+      ...defenseEffectsRef.current,
+      {
+        x: hitX ?? defense?.center.x ?? 0.5,
+        y: hitY ?? defense?.center.y ?? 0.5,
+        life: 520,
+        maxLife: 520,
+        target,
+      },
+    ].slice(-10);
+  };
+
   const recordAttack = (
     type: AttackRecord["type"],
     owner: PlayerId,
@@ -2532,16 +2802,33 @@ function App() {
 
     battleStartedRef.current = true;
 
+    const defending = defenseStatesRef.current.some(
+      (state) => state.playerId === target,
+    );
+    const finalAmount = defending ? DEFENSE_DAMAGE : amount;
+
+    if (defending) {
+      spawnDefenseEffect(target, hitX, hitY);
+    }
+
     if (target === "player2") {
       setPlayer2HP((current) => {
-        const next = Math.max(0, current - amount);
+        const next = Math.max(0, current - finalAmount);
 
-        if (hitX !== undefined && hitY !== undefined) {
-          spawnHitEffect(hitX, hitY, hitColor ?? "#ff6b6b", amount, target);
+        if (!defending && hitX !== undefined && hitY !== undefined) {
+          spawnHitEffect(
+            hitX,
+            hitY,
+            hitColor ?? "#ff6b6b",
+            finalAmount,
+            target,
+          );
         }
 
-        damageFlashUntilRef.current[target] =
-          performance.now() + DAMAGE_FLASH_TIME;
+        if (!defending) {
+          damageFlashUntilRef.current[target] =
+            performance.now() + DAMAGE_FLASH_TIME;
+        }
 
         const winner = getTimerWinner(playerHP, next);
 
@@ -2555,14 +2842,22 @@ function App() {
     }
 
     setPlayerHP((current) => {
-      const next = Math.max(0, current - amount);
+      const next = Math.max(0, current - finalAmount);
 
-      if (hitX !== undefined && hitY !== undefined) {
-        spawnHitEffect(hitX, hitY, hitColor ?? "#53d4ff", amount, target);
+      if (!defending && hitX !== undefined && hitY !== undefined) {
+        spawnHitEffect(
+          hitX,
+          hitY,
+          hitColor ?? "#53d4ff",
+          finalAmount,
+          target,
+        );
       }
 
-      damageFlashUntilRef.current[target] =
-        performance.now() + DAMAGE_FLASH_TIME;
+      if (!defending) {
+        damageFlashUntilRef.current[target] =
+          performance.now() + DAMAGE_FLASH_TIME;
+      }
 
       const winner = getTimerWinner(next, player2HP);
 
@@ -3043,6 +3338,10 @@ function App() {
         battlePlayers,
       );
 
+      const defenseStates = getDefenseStates(handAssignments);
+
+      defenseStatesRef.current = defenseStates;
+
       updatePunchFireballs(now, handAssignments, battlePlayers);
 
       updateVoiceTextAttacks(now, battlePlayers, frameDelta);
@@ -3132,6 +3431,9 @@ function App() {
               player.attack.beamActive ||
               thunderChargingPlayers.has(player.id) ||
               healChargingPlayers.has(player.id),
+            defending: defenseStates.some(
+              (state) => state.playerId === player.id,
+            ),
             chargingThunder: thunderChargingPlayers.has(player.id),
             thunderProgress:
               thunderStarted === null
@@ -3168,6 +3470,13 @@ function App() {
         .filter((effect) => effect.life > 0);
 
       healEffectsRef.current = healEffectsRef.current
+        .map((effect) => ({
+          ...effect,
+          life: effect.life - 16,
+        }))
+        .filter((effect) => effect.life > 0);
+
+      defenseEffectsRef.current = defenseEffectsRef.current
         .map((effect) => ({
           ...effect,
           life: effect.life - 16,
@@ -3271,6 +3580,7 @@ function App() {
         faceAttackStates,
         handAssignments,
         battlePlayers,
+        defenseStates,
         fireballsRef.current,
         now,
         showJointGuides,
@@ -3291,6 +3601,7 @@ function App() {
     faceAttackStates: FaceAttackState[],
     handAssignments: HandAssignment[],
     battlePlayers: BattlePlayer[],
+    defenseStates: DefenseState[],
     fireballs: Fireball[],
     time: number,
     showGuides: boolean,
@@ -3384,6 +3695,10 @@ function App() {
     drawFireballs(ctx, canvas, fireballs, time);
 
     drawVoiceTextAttacks(ctx, canvas, voiceTextAttacksRef.current, time);
+
+    drawDefenseShields(ctx, canvas, defenseStates, time);
+
+    drawDefenseEffects(ctx, canvas, defenseEffectsRef.current);
 
     drawHitEffects(ctx, canvas, hitEffectsRef.current);
 
@@ -3618,6 +3933,7 @@ function App() {
                   marker.id,
                   marker.damaged ? "damaged" : "",
                   marker.attacking ? "attacking" : "",
+                  marker.defending ? "defending" : "",
                 ].join(" ")}
                 style={{
                   left: `${marker.x * 100}%`,
@@ -3626,10 +3942,12 @@ function App() {
               >
                 <span>{getPlayerLabel(marker.id)}</span>
                 <small>
-                  {marker.chargingHeal
-                    ? "HEAL"
-                    : marker.chargingThunder
-                      ? "THUNDER"
+                  {marker.defending
+                    ? "GUARD"
+                    : marker.chargingHeal
+                      ? "HEAL"
+                      : marker.chargingThunder
+                        ? "THUNDER"
                       : `${marker.handCount} HANDS`}
                 </small>
                 {(marker.chargingThunder || marker.chargingHeal) && (
