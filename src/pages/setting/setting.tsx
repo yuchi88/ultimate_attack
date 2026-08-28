@@ -23,51 +23,25 @@ const SETTINGS_STORAGE_KEYS = {
 };
 
 export function normalizeBattleSettings(
-  settings: Partial<BattleSettings>
+  settings: Partial<BattleSettings>,
 ): BattleSettings {
   return {
-    maxPlayers:
-      Math.min(
-        4,
-        Math.max(
-          2,
-          Number(settings.maxPlayers ?? 2)
-        )
-      ),
-    maxHands:
-      Math.min(
-        8,
-        Math.max(
-          4,
-          Number(settings.maxHands ?? 4)
-        )
-      ),
-    showJointGuides:
-      settings.showJointGuides ?? true,
+    maxPlayers: Math.min(4, Math.max(2, Number(settings.maxPlayers ?? 2))),
+    maxHands: Math.min(8, Math.max(4, Number(settings.maxHands ?? 4))),
+    showJointGuides: settings.showJointGuides ?? true,
   };
 }
 
 export function loadBattleSettings(): BattleSettings {
-  const storedPlayers =
-    localStorage.getItem(
-      SETTINGS_STORAGE_KEYS.maxPlayers
-    );
-  const storedHands =
-    localStorage.getItem(
-      SETTINGS_STORAGE_KEYS.maxHands
-    );
-  const storedShowJointGuides =
-    localStorage.getItem(
-      SETTINGS_STORAGE_KEYS.showJointGuides
-    );
+  const storedPlayers = localStorage.getItem(SETTINGS_STORAGE_KEYS.maxPlayers);
+  const storedHands = localStorage.getItem(SETTINGS_STORAGE_KEYS.maxHands);
+  const storedShowJointGuides = localStorage.getItem(
+    SETTINGS_STORAGE_KEYS.showJointGuides,
+  );
 
   return normalizeBattleSettings({
-    maxPlayers: storedPlayers
-      ? Number(storedPlayers)
-      : undefined,
-    maxHands: storedHands
-      ? Number(storedHands)
-      : undefined,
+    maxPlayers: storedPlayers ? Number(storedPlayers) : undefined,
+    maxHands: storedHands ? Number(storedHands) : undefined,
     showJointGuides:
       storedShowJointGuides === null
         ? undefined
@@ -75,50 +49,36 @@ export function loadBattleSettings(): BattleSettings {
   });
 }
 
-export function saveBattleSettings(
-  settings: BattleSettings
-) {
-  const safeSettings =
-    normalizeBattleSettings(settings);
+export function saveBattleSettings(settings: BattleSettings) {
+  const safeSettings = normalizeBattleSettings(settings);
 
   localStorage.setItem(
     SETTINGS_STORAGE_KEYS.maxPlayers,
-    String(safeSettings.maxPlayers)
+    String(safeSettings.maxPlayers),
   );
   localStorage.setItem(
     SETTINGS_STORAGE_KEYS.maxHands,
-    String(safeSettings.maxHands)
+    String(safeSettings.maxHands),
   );
   localStorage.setItem(
     SETTINGS_STORAGE_KEYS.showJointGuides,
-    String(safeSettings.showJointGuides)
+    String(safeSettings.showJointGuides),
   );
 }
 
-export function SettingsTabs({
-  activeTab,
-  onChange,
-}: SettingsTabsProps) {
+export function SettingsTabs({ activeTab, onChange }: SettingsTabsProps) {
   return (
     <nav className="app-tabs">
       <button
         type="button"
-        className={
-          activeTab === "battle"
-            ? "app-tab active"
-            : "app-tab"
-        }
+        className={activeTab === "battle" ? "app-tab active" : "app-tab"}
         onClick={() => onChange("battle")}
       >
         BATTLE
       </button>
       <button
         type="button"
-        className={
-          activeTab === "settings"
-            ? "app-tab active"
-            : "app-tab"
-        }
+        className={activeTab === "settings" ? "app-tab active" : "app-tab"}
         onClick={() => onChange("settings")}
       >
         SETTINGS
@@ -127,40 +87,37 @@ export function SettingsTabs({
   );
 }
 
-function SettingsScreen({
-  settings,
-  onApply,
-}: SettingsScreenProps) {
-  const applyNext = (
-    nextSettings: BattleSettings
-  ) => {
-    onApply(
-      normalizeBattleSettings(
-        nextSettings
-      )
-    );
+function SettingsScreen({ settings, onApply }: SettingsScreenProps) {
+  const applyNext = (nextSettings: BattleSettings) => {
+    onApply(normalizeBattleSettings(nextSettings));
   };
 
   return (
     <div className="settings-screen">
       <div className="settings-page">
         <div className="settings-header">
-          <h2>設定</h2>
+          <div>
+            <p className="settings-kicker">BATTLE CONFIGURATION</p>
+            <h2>設定</h2>
+            <p className="settings-description">
+              認識と表示に関する設定を変更できます
+            </p>
+          </div>
         </div>
 
         <div className="settings-item">
-          <label htmlFor="maxPlayers">
-            認識人数上限
-          </label>
+          <div className="settings-item-copy">
+            <label htmlFor="maxPlayers">認識人数上限</label>
+            <p>同時に認識するプレイヤーの最大人数</p>
+          </div>
           <select
             id="maxPlayers"
+            aria-label="認識人数上限"
             value={settings.maxPlayers}
             onChange={(event) => {
               applyNext({
                 ...settings,
-                maxPlayers: Number(
-                  event.target.value
-                ),
+                maxPlayers: Number(event.target.value),
               });
             }}
           >
@@ -171,18 +128,18 @@ function SettingsScreen({
         </div>
 
         <div className="settings-item">
-          <label htmlFor="maxHands">
-            認識手数上限
-          </label>
+          <div className="settings-item-copy">
+            <label htmlFor="maxHands">認識手数上限</label>
+            <p>1人あたりに認識する手の数の上限</p>
+          </div>
           <select
             id="maxHands"
+            aria-label="認識手数上限"
             value={settings.maxHands}
             onChange={(event) => {
               applyNext({
                 ...settings,
-                maxHands: Number(
-                  event.target.value
-                ),
+                maxHands: Number(event.target.value),
               });
             }}
           >
@@ -195,21 +152,19 @@ function SettingsScreen({
         </div>
 
         <div className="settings-item">
-          <label>
-            関節ガイド表示
-          </label>
+          <div className="settings-item-copy">
+            <label htmlFor="showJointGuides">関節ガイド表示</label>
+            <p>カメラ映像に関節の位置を表示</p>
+          </div>
           <button
             type="button"
-            className={
-              settings.showJointGuides
-                ? "toggle active"
-                : "toggle"
-            }
+            id="showJointGuides"
+            aria-pressed={settings.showJointGuides}
+            className={settings.showJointGuides ? "toggle active" : "toggle"}
             onClick={() => {
               applyNext({
                 ...settings,
-                showJointGuides:
-                  !settings.showJointGuides,
+                showJointGuides: !settings.showJointGuides,
               });
             }}
           >
@@ -218,7 +173,8 @@ function SettingsScreen({
         </div>
 
         <div className="settings-footer">
-          自動保存中
+          <span className="settings-save-dot" aria-hidden="true" />
+          変更は自動保存されます
         </div>
       </div>
     </div>
