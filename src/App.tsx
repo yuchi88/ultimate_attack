@@ -5,6 +5,11 @@ import {
   PoseLandmarker,
   FaceLandmarker,
 } from "@mediapipe/tasks-vision";
+import SettingsPanel, {
+  loadBattleSettings,
+  saveBattleSettings,
+  type BattleSettings,
+} from "./pages/setting/setting";
 
 
 import "./App.css";
@@ -2334,38 +2339,20 @@ function App() {
     useState("カメラを起動してください");
 
   const applySettings = (
-    nextMaxPlayers: number,
-    nextMaxHands: number,
-    nextShowJointGuides = showJointGuides
+    nextSettings: BattleSettings
   ) => {
-    const safeMaxPlayers =
-      Math.min(4, Math.max(2, nextMaxPlayers));
-    const safeMaxHands =
-      Math.min(8, Math.max(4, nextMaxHands));
-
-    setMaxPlayers(safeMaxPlayers);
-    setMaxHands(safeMaxHands);
+    setMaxPlayers(nextSettings.maxPlayers);
+    setMaxHands(nextSettings.maxHands);
     setShowJointGuides(
-      nextShowJointGuides
+      nextSettings.showJointGuides
     );
 
-    localStorage.setItem(
-      "ultimate_max_players",
-      String(safeMaxPlayers)
-    );
-    localStorage.setItem(
-      "ultimate_max_hands",
-      String(safeMaxHands)
-    );
-    localStorage.setItem(
-      "ultimate_show_joint_guides",
-      String(nextShowJointGuides)
-    );
+    saveBattleSettings(nextSettings);
 
     if (cameraStarted) {
       initializeModels(
-        safeMaxPlayers,
-        safeMaxHands
+        nextSettings.maxPlayers,
+        nextSettings.maxHands
       );
     }
   };
@@ -2413,39 +2400,17 @@ function App() {
   };
 
   useEffect(() => {
-    const storedPlayers =
-      localStorage.getItem(
-        "ultimate_max_players"
-      );
-    const storedHands =
-      localStorage.getItem(
-        "ultimate_max_hands"
-      );
-    const storedShowJointGuides =
-      localStorage.getItem(
-        "ultimate_show_joint_guides"
-      );
+    const storedSettings =
+      loadBattleSettings();
 
     setMaxPlayers(
-      storedPlayers
-        ? Math.min(
-            4,
-            Math.max(2, Number(storedPlayers))
-          )
-        : 2
+      storedSettings.maxPlayers
     );
     setMaxHands(
-      storedHands
-        ? Math.min(
-            8,
-            Math.max(4, Number(storedHands))
-          )
-        : 4
+      storedSettings.maxHands
     );
     setShowJointGuides(
-      storedShowJointGuides === null
-        ? true
-        : storedShowJointGuides === "true"
+      storedSettings.showJointGuides
     );
   }, []);
 
@@ -4258,95 +4223,17 @@ function App() {
     <div className="app">
 
       {showSettings && (
-        <div className="settings-overlay">
-          <div className="settings-panel">
-            <div className="settings-header">
-              <h2>設定</h2>
-              <button
-                type="button"
-                className="close-settings"
-                onClick={() => setShowSettings(false)}
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="settings-item">
-              <label htmlFor="maxPlayers">
-                認識人数上限
-              </label>
-              <select
-                id="maxPlayers"
-                value={maxPlayers}
-                onChange={(event) => {
-                  applySettings(
-                    Number(event.target.value),
-                    maxHands
-                  );
-                }}
-              >
-                <option value={2}>2人</option>
-                <option value={3}>3人</option>
-                <option value={4}>4人</option>
-              </select>
-            </div>
-
-            <div className="settings-item">
-              <label htmlFor="maxHands">
-                認識手数上限
-              </label>
-              <select
-                id="maxHands"
-                value={maxHands}
-                onChange={(event) => {
-                  applySettings(
-                    maxPlayers,
-                    Number(event.target.value)
-                  );
-                }}
-              >
-                <option value={4}>4手</option>
-                <option value={5}>5手</option>
-                <option value={6}>6手</option>
-                <option value={7}>7手</option>
-                <option value={8}>8手</option>
-              </select>
-            </div>
-
-            <div className="settings-item">
-              <label>
-                関節ガイド表示
-              </label>
-              <button
-                type="button"
-                className={
-                  showJointGuides
-                    ? "toggle active"
-                    : "toggle"
-                }
-                onClick={() => {
-                  applySettings(
-                    maxPlayers,
-                    maxHands,
-                    !showJointGuides
-                  );
-                }}
-              >
-                {showJointGuides ? "ON" : "OFF"}
-              </button>
-            </div>
-
-            <div className="settings-footer">
-              <button
-                type="button"
-                className="settings-primary"
-                onClick={() => setShowSettings(false)}
-              >
-                適用して戻る
-              </button>
-            </div>
-          </div>
-        </div>
+        <SettingsPanel
+          settings={{
+            maxPlayers,
+            maxHands,
+            showJointGuides,
+          }}
+          onApply={applySettings}
+          onClose={() =>
+            setShowSettings(false)
+          }
+        />
       )}
 
       {battleWinner && (
