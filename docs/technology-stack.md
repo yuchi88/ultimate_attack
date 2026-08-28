@@ -1,0 +1,60 @@
+# 必殺技ジェネレーター 使用技術
+
+この資料は、現在の `package.json` と `package-lock.json` をもとに、使用技術をフロントエンド、バックエンド、インフラに分けて整理したものです。バージョンは、実際に解決されている `package-lock.json` の値を優先しています。
+
+## フロントエンド
+
+| 技術 | バージョン | 説明 |
+| --- | --- | --- |
+| React | 19.2.8 | 画面 UI、状態管理、バトル画面と設定画面の描画に使用しています。 |
+| React DOM | 19.2.8 | React アプリをブラウザの DOM にマウントするために使用しています。 |
+| TypeScript | 6.0.3 | `src/App.tsx` や設定画面などを型付きで実装するために使用しています。 |
+| Vite | 8.2.2 | 開発サーバー、ビルド、プレビューのためのフロントエンド開発基盤です。 |
+| @vitejs/plugin-react | 6.1.0 | Vite で React を扱うための公式プラグインです。 |
+| @mediapipe/tasks-vision | 1.0.1 | Web カメラ映像から手、姿勢、顔のランドマークを検出するために使用しています。 |
+| @svenflow/micro-handpose | 0.3.0 | 手のポーズ認識系ライブラリとして依存関係に含まれています。現在の主要な推論処理は `@mediapipe/tasks-vision` 側で行われています。 |
+| HTMLVideoElement | ブラウザ標準 API | Web カメラ映像を画面上で扱うために使用しています。 |
+| HTMLCanvasElement / Canvas 2D API | ブラウザ標準 API | 骨格ガイド、口ビーム、火球、雷、回復、ヒット演出などを描画するために使用しています。 |
+| navigator.mediaDevices.getUserMedia | ブラウザ標準 API | ユーザーの Web カメラを起動し、映像ストリームを取得するために使用しています。 |
+| requestAnimationFrame | ブラウザ標準 API | カメラフレームごとの認識ループと描画更新に使用しています。 |
+| localStorage | ブラウザ標準 API | 認識人数、認識手数、関節ガイド表示などの設定保存に使用しています。 |
+| CSS | ブラウザ標準 | `src/App.css` と `src/index.css` で画面レイアウト、カメラ領域、HP 表示、プレイヤーマーカーなどを定義しています。 |
+
+## バックエンド
+
+| 技術 | バージョン | 説明 |
+| --- | --- | --- |
+| バックエンドサーバー | なし | このアプリはサーバーを持たないクライアント完結型の構成です。カメラ取得、推論、ゲーム判定、描画はブラウザ内で実行されます。 |
+| API サーバー | なし | 独自 API は実装されていません。 |
+| データベース | なし | 永続化はブラウザの `localStorage` による設定保存のみです。 |
+| 認証基盤 | なし | ログインやユーザー認証の仕組みはありません。 |
+
+## インフラ / 実行基盤
+
+| 技術 | バージョン | 説明 |
+| --- | --- | --- |
+| Node.js | 24.20.0 | ローカルで開発コマンドやビルドコマンドを実行するための JavaScript 実行環境です。 |
+| npm | 11.19.0 | パッケージ管理と `npm run dev`、`npm run build`、`npm run lint` などの実行に使用しています。 |
+| package-lock.json | lockfileVersion 3 | 依存パッケージの解決済みバージョンを固定するための lock ファイルです。 |
+| Vite 開発サーバー | 8.2.2 | 開発時にアプリをローカル配信します。本番用の独自サーバーはありません。 |
+| 静的ファイル配信 | Vite / ブラウザ | `public/mediapipe` の wasm と `public/models/face_landmarker.task` をアプリから参照します。 |
+| Google Storage の MediaPipe モデル | モデル URL 指定 | 手と姿勢の MediaPipe モデルは Google Storage 上のモデル URL から読み込む設定です。 |
+| デプロイ環境 | 未定義 | リポジトリ内には特定のホスティングサービスや CI/CD の設定は見当たりません。Vite の静的ビルド成果物を任意の静的ホスティングへ配置できる構成です。 |
+
+## 開発・品質管理
+
+| 技術 | バージョン | 説明 |
+| --- | --- | --- |
+| ESLint | 10.9.0 | TypeScript / React コードの静的チェックに使用します。 |
+| @eslint/js | 10.0.1 | ESLint の JavaScript ルールセットです。 |
+| typescript-eslint | 8.67.0 | TypeScript を ESLint で解析するために使用します。 |
+| eslint-plugin-react-hooks | 7.1.1 | React Hooks の使い方をチェックするための ESLint プラグインです。 |
+| eslint-plugin-react-refresh | 0.5.4 | Vite / React Refresh に関連するチェックに使用します。 |
+| globals | 17.11.0 | ESLint 設定でブラウザや Node.js などのグローバル変数を扱うために使用します。 |
+| @types/react | 19.2.18 | React の TypeScript 型定義です。 |
+| @types/react-dom | 19.2.5 | React DOM の TypeScript 型定義です。 |
+| @types/node | 24.13.3 | Node.js の TypeScript 型定義です。 |
+
+## まとめ
+
+このアプリは、React + TypeScript + Vite を中心にしたフロントエンド単体アプリです。バックエンドやデータベースは持たず、Web カメラ映像をブラウザ内で MediaPipe によって解析し、その結果をもとにゲーム判定と Canvas 演出を行います。インフラ面では、ローカル開発は Node.js / npm / Vite、本番配信は静的ファイル配信を前提にできる構成です。
