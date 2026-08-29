@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   FilesetResolver,
   HandLandmarker,
@@ -27,7 +27,11 @@ type Vector2 = {
   y: number;
 };
 
-type PlayerId = "player1" | "player2";
+const PLAYER_IDS = ["player1", "player2", "player3", "player4"] as const;
+
+type PlayerId = (typeof PLAYER_IDS)[number];
+
+type PlayerHp = Record<PlayerId, number>;
 
 type Fireball = {
   x: number;
@@ -35,10 +39,35 @@ type Fireball = {
   vx: number;
   vy: number;
   radius: number;
+  damage: number;
+  chargeLevel: number;
   life: number;
   maxLife: number;
   owner: PlayerId | null;
   attackId: number | null;
+};
+
+type VoiceTextAttack = {
+  text: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  startX: number;
+  startY: number;
+  targetX: number;
+  targetY: number;
+  fontSize: number;
+  radius: number;
+  damage: number;
+  delay: number;
+  seed: number;
+  life: number;
+  maxLife: number;
+  owner: PlayerId;
+  target: PlayerId;
+  attackId: number;
+  color: string;
 };
 
 type HitEffect = {
@@ -61,6 +90,14 @@ type HealEffect = {
   amount: number;
 };
 
+type DefenseEffect = {
+  x: number;
+  y: number;
+  life: number;
+  maxLife: number;
+  target: PlayerId;
+};
+
 type LightningEffect = {
   x: number;
   y: number;
@@ -74,6 +111,8 @@ type PunchHandState = {
   previousCenter: Point | null;
   previousSize: number;
   previousTime: number;
+  chargeAnchor: Point | null;
+  punchReadyUntil: number;
   trajectory: Point[];
   charge: number;
   cooldown: number;
@@ -82,19 +121,29 @@ type PunchHandState = {
 
 const FINGER_TIPS = [4, 8, 12, 16, 20];
 const OPEN_HAND_TIPS = [8, 12, 16, 20];
-const MAX_PUNCH_CHARGE = 1800;
-const MIN_PUNCH_CHARGE = 120;
+const MAX_PUNCH_CHARGE = 3000;
+const MIN_PUNCH_CHARGE = 500;
+const FIREBALL_CHARGE_STAGE_TIME = 500;
+const FIREBALL_LEVELS = [
+  { radius: 0.04, damage: 8 },
+  { radius: 0.055, damage: 12 },
+  { radius: 0.072, damage: 17 },
+  { radius: 0.09, damage: 23 },
+  { radius: 0.112, damage: 30 },
+] as const;
 const MIN_FIST_DISTANCE = 0.14;
-const MIN_PUNCH_MOVE_SCALE = 0.18;
-const MIN_PUNCH_MOVE_DISTANCE = 0.012;
+const MIN_PUNCH_MOVE_SCALE = 0.32;
+const MIN_PUNCH_MOVE_DISTANCE = 0.04;
+const PUNCH_STILL_MOVE_BUFFER = 0.018;
+const PUNCH_READY_BUFFER_TIME = 480;
 const MIN_PUNCH_STRAIGHTNESS = 0.58;
 const PUNCH_COOLDOWN = 520;
+const BEAM_DAMAGE = 6;
 const BEAM_DAMAGE_COOLDOWN = 500;
 const SHOCKWAVE_DAMAGE_COOLDOWN = 650;
 const DAMAGE_FLASH_TIME = 650;
 const BEAM_TARGET_RADIUS_MIN = 0.075;
 const BEAM_TARGET_RADIUS_SCALE = 0.52;
-const FIREBALL_DAMAGE = 12;
 const SHOCKWAVE_DAMAGE = 3;
 const SHOCKWAVE_HIT_RADIUS = 0.16;
 const THUNDER_DAMAGE = 32;
@@ -105,9 +154,150 @@ const THUNDER_ABOVE_HEAD_MARGIN = 0.08;
 const HEAL_AMOUNT = 16;
 const HEAL_CHARGE_TIME = 900;
 const HEAL_COOLDOWN = 2800;
+const VOICE_CHARACTER_DAMAGE = 2;
+const VOICE_ATTACK_COOLDOWN = 260;
+const VOICE_ATTACK_LIFE = 1800;
+const VOICE_SOUND_START_LEVEL = 7;
+const VOICE_SOUND_END_LEVEL = 3;
+const VOICE_SILENCE_RESET_TIME = 720;
+const VOICE_MOUTH_ACTIVITY_DECAY = 0.9;
+const VOICE_MOUTH_ACTIVITY_WEIGHT = 18;
+const DEFENSE_DAMAGE = 1;
+const DEFENSE_MIN_HAND_SIZE = 0.045;
+const DEFENSE_MAX_PALM_Z_SPREAD = 0.09;
+const FACE_TRACK_MAX_DISTANCE = 0.28;
+const FACE_MISSING_DAMAGE = 5;
+const FACE_MISSING_DAMAGE_INTERVAL = 1500;
 const MAX_HP = 300;
 
-type BattleWinner = "PLAYER 1" | "PLAYER 2";
+type BattleWinner = PlayerId;
+
+const PLAYER_COLORS: Record<PlayerId, string> = {
+  player1: "#53d4ff",
+  player2: "#ff6b6b",
+  player3: "#58ff9a",
+  player4: "#ffcc66",
+};
+
+const WAZA_LABELS: Record<DamageAttackType, string> = {
+  beam: "レーザー",
+  fireball: "火球",
+  shockwave: "衝撃波",
+  thunder: "雷撃",
+  voice: "VOICE",
+};
+
+function getActivePlayerIds(maxPlayers: number) {
+  return PLAYER_IDS.slice(0, maxPlayers);
+}
+
+function createPlayerHp(): PlayerHp {
+  return PLAYER_IDS.reduce(
+    (hp, playerId) => ({
+      ...hp,
+      [playerId]: MAX_HP,
+    }),
+    {} as PlayerHp,
+  );
+}
+
+function createPlayerNumberRecord(value: number): Record<PlayerId, number> {
+  return PLAYER_IDS.reduce(
+    (record, playerId) => ({
+      ...record,
+      [playerId]: value,
+    }),
+    {} as Record<PlayerId, number>,
+  );
+}
+
+function createPlayerNullableNumberRecord(
+  value: number | null,
+): Record<PlayerId, number | null> {
+  return PLAYER_IDS.reduce(
+    (record, playerId) => ({
+      ...record,
+      [playerId]: value,
+    }),
+    {} as Record<PlayerId, number | null>,
+  );
+}
+
+function createPlayerStringRecord(value: string): Record<PlayerId, string> {
+  return PLAYER_IDS.reduce(
+    (record, playerId) => ({
+      ...record,
+      [playerId]: value,
+    }),
+    {} as Record<PlayerId, string>,
+  );
+}
+
+function createTrackedPlayerSlots(): Record<PlayerId, TrackedPlayerSlot> {
+  return PLAYER_IDS.reduce(
+    (slots, playerId) => ({
+      ...slots,
+      [playerId]: {
+        id: playerId,
+        face: null,
+        center: null,
+        radius: BEAM_TARGET_RADIUS_MIN,
+        attack: null,
+        registered: false,
+        visible: false,
+        lastSeenAt: 0,
+      },
+    }),
+    {} as Record<PlayerId, TrackedPlayerSlot>,
+  );
+}
+
+function getBattleWinner(
+  playerHp: PlayerHp,
+  activePlayerIds: PlayerId[],
+): BattleWinner | null {
+  if (activePlayerIds.length < 2) {
+    return null;
+  }
+
+  const alivePlayers = activePlayerIds.filter(
+    (playerId) => playerHp[playerId] > 0,
+  );
+
+  return alivePlayers.length === 1 ? alivePlayers[0] : null;
+}
+
+function getRegisteredPlayerIds(
+  slots: Record<PlayerId, TrackedPlayerSlot>,
+  maxPlayers: number,
+) {
+  return getActivePlayerIds(maxPlayers).filter(
+    (playerId) => slots[playerId].registered,
+  );
+}
+
+function getFireballChargeLevel(chargeTime: number) {
+  const extraChargeTime = Math.max(0, chargeTime - MIN_PUNCH_CHARGE);
+
+  return Math.min(
+    FIREBALL_LEVELS.length,
+    Math.floor(extraChargeTime / FIREBALL_CHARGE_STAGE_TIME) + 1,
+  );
+}
+
+function getFireballLevelStats(chargeTime: number) {
+  return FIREBALL_LEVELS[getFireballChargeLevel(chargeTime) - 1];
+}
+
+function getFireballChargeProgress(chargeTime: number) {
+  return Math.min(1, Math.max(0, chargeTime / MAX_PUNCH_CHARGE));
+}
+
+function isDamageAttackType(
+  type: AttackRecord["type"],
+): type is DamageAttackType {
+  return type !== "heal";
+}
 
 type FaceAttackState = ReturnType<typeof getFaceAttackState>;
 
@@ -117,6 +307,17 @@ type BattlePlayer = {
   center: Point;
   radius: number;
   attack: FaceAttackState;
+};
+
+type TrackedPlayerSlot = {
+  id: PlayerId;
+  face: Point[] | null;
+  center: Point | null;
+  radius: number;
+  attack: FaceAttackState | null;
+  registered: boolean;
+  visible: boolean;
+  lastSeenAt: number;
 };
 
 type PlayerMarker = {
@@ -130,6 +331,10 @@ type PlayerMarker = {
   thunderProgress: number;
   chargingHeal: boolean;
   healProgress: number;
+  defending: boolean;
+  missing: boolean;
+  fireballChargeLevel: number;
+  fireballChargeProgress: number;
 };
 
 type HandAssignment = {
@@ -137,13 +342,87 @@ type HandAssignment = {
   hands: Point[][];
 };
 
+type DefenseState = {
+  playerId: PlayerId;
+  center: Point;
+  radius: number;
+};
+
 type AttackRecord = {
   id: number;
-  type: "beam" | "fireball" | "shockwave" | "thunder" | "heal";
+  type: "beam" | "fireball" | "shockwave" | "thunder" | "heal" | "voice";
   owner: PlayerId;
   target: PlayerId | null;
   startedAt: number;
   lastHitAt: number | null;
+  photo: string | null;
+};
+
+type DamageAttackType = Exclude<AttackRecord["type"], "heal">;
+
+type BestWazaEntry = {
+  key: string;
+  type: DamageAttackType;
+  owner: PlayerId;
+  damage: number;
+  attackId: number;
+  attackCount: number;
+  photo: string | null;
+  updatedAt: number;
+};
+
+type VoiceAttackTarget = {
+  owner: PlayerId;
+  target: PlayerId;
+  start: Point;
+  targetCenter: Point;
+  targetRadius: number;
+  eyesClosed: boolean;
+};
+
+type SpeechRecognitionAlternativeLike = {
+  transcript: string;
+};
+
+type SpeechRecognitionResultLike = {
+  isFinal: boolean;
+  length: number;
+  0: SpeechRecognitionAlternativeLike;
+};
+
+type SpeechRecognitionResultsLike = {
+  length: number;
+  [index: number]: SpeechRecognitionResultLike;
+};
+
+type SpeechRecognitionEventLike = Event & {
+  resultIndex: number;
+  results: SpeechRecognitionResultsLike;
+};
+
+type SpeechRecognitionErrorEventLike = Event & {
+  error?: string;
+};
+
+type SpeechRecognitionLike = {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  maxAlternatives: number;
+  onstart: (() => void) | null;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+};
+
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
+
+type SpeechRecognitionWindow = Window & {
+  SpeechRecognition?: SpeechRecognitionConstructor;
+  webkitSpeechRecognition?: SpeechRecognitionConstructor;
 };
 
 const POSE_CONNECTIONS = [
@@ -360,6 +639,80 @@ function isOpenHand(hand: Point[]) {
   }).length;
 
   return extendedCount >= 3;
+}
+
+function isDefenseOpenHand(hand: Point[]) {
+  const wrist = hand[0];
+  const palmCenter = getPalmCenter(hand);
+
+  if (!wrist || !palmCenter) {
+    return false;
+  }
+
+  const extendedCount = [
+    [8, 6],
+    [12, 10],
+    [16, 14],
+    [20, 18],
+  ].filter(([tipIndex, pipIndex]) => {
+    const tip = hand[tipIndex];
+    const pip = hand[pipIndex];
+
+    if (!tip || !pip) {
+      return false;
+    }
+
+    return (
+      distance(wrist, tip) > distance(wrist, pip) * 1.08 &&
+      distance(palmCenter, tip) > distance(palmCenter, pip) * 1.01
+    );
+  }).length;
+
+  return extendedCount >= 2;
+}
+
+function isOpenPalmFacingCamera(hand: Point[]) {
+  const palmCenter = getPalmCenter(hand);
+  const wrist = hand[0];
+
+  if (!palmCenter || !wrist || !isDefenseOpenHand(hand)) {
+    return false;
+  }
+
+  const handSize = getHandSize(hand);
+
+  if (handSize < DEFENSE_MIN_HAND_SIZE) {
+    return false;
+  }
+
+  const palmPoints = [hand[0], hand[5], hand[9], hand[13], hand[17]].filter(
+    (point): point is Point => point !== undefined,
+  );
+  const palmZValues = palmPoints.map((point) => point.z);
+  const palmZSpread = Math.max(...palmZValues) - Math.min(...palmZValues);
+  const fingerCenter = getFingerCenter(hand);
+
+  if (!fingerCenter) {
+    return false;
+  }
+
+  const tips = OPEN_HAND_TIPS.map((index) => hand[index]).filter(
+    (point): point is Point => point !== undefined,
+  );
+  const tipSpread = Math.max(
+    ...tips.map((tip, index) =>
+      tips
+        .slice(index + 1)
+        .reduce((largest, otherTip) => Math.max(largest, distance(tip, otherTip)), 0),
+    ),
+  );
+
+  const fingersRaisedFromWrist = distance(wrist, fingerCenter) > handSize * 0.65;
+  const palmLooksFlat =
+    palmZSpread < Math.max(DEFENSE_MAX_PALM_Z_SPREAD, handSize * 0.75);
+  const fingersSpread = tipSpread > handSize * 0.5;
+
+  return fingersRaisedFromWrist && palmLooksFlat && fingersSpread;
 }
 
 function isFingerExtended(hand: Point[], tipIndex: number, pipIndex: number) {
@@ -844,6 +1197,87 @@ function drawFireballs(
   ctx.restore();
 }
 
+function drawVoiceTextAttacks(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  attacks: VoiceTextAttack[],
+  time: number,
+) {
+  attacks
+    .filter((attack) => attack.delay <= 0)
+    .forEach((attack) => {
+      const alpha = Math.max(0, attack.life / attack.maxLife);
+      const progress = 1 - alpha;
+      const x = attack.x * canvas.width;
+      const y = attack.y * canvas.height;
+      const pulse = 0.92 + Math.sin(time / 70 + attack.seed) * 0.08;
+      const direction = getNormalizedDirection(
+        {
+          x: attack.x - attack.vx * 120,
+          y: attack.y - attack.vy * 120,
+          z: 0,
+        },
+        {
+          x: attack.x,
+          y: attack.y,
+          z: 0,
+        },
+      );
+
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.globalAlpha = Math.min(1, alpha * 1.4);
+
+      for (let index = 1; index <= 3; index += 1) {
+        const echoProgress = Math.max(0, progress - index * 0.055);
+        const wobble =
+          Math.sin(time / 95 + attack.seed + index * 1.9) *
+          attack.radius *
+          0.65;
+        const echoX =
+          (attack.startX + (attack.targetX - attack.startX) * echoProgress) *
+            canvas.width +
+          -direction.y * wobble * canvas.width;
+        const echoY =
+          (attack.startY + (attack.targetY - attack.startY) * echoProgress) *
+            canvas.height +
+          direction.x * wobble * canvas.height;
+
+        ctx.save();
+        ctx.globalAlpha = alpha * (0.24 / index);
+        ctx.translate(echoX, echoY);
+        ctx.scale(-1, 1);
+        ctx.font = `900 ${
+          attack.fontSize * (1 - index * 0.1)
+        }px Arial, sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = attack.color;
+        ctx.fillText(attack.text, 0, 0);
+        ctx.restore();
+      }
+
+      ctx.translate(x, y);
+      ctx.scale(-1, 1);
+      ctx.rotate(Math.sin(time / 120 + attack.seed) * 0.22);
+      ctx.font = `900 ${attack.fontSize * pulse}px Arial, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.lineJoin = "round";
+      ctx.lineWidth = Math.max(6, attack.fontSize * 0.14);
+      ctx.shadowColor = attack.color;
+      ctx.shadowBlur = 30;
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.9)";
+      ctx.strokeText(attack.text, 0, 0);
+      ctx.fillStyle = attack.color;
+      ctx.fillText(attack.text, 0, 0);
+      ctx.lineWidth = Math.max(2, attack.fontSize * 0.04);
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+      ctx.strokeText(attack.text, 0, 0);
+      ctx.restore();
+    });
+}
+
 function drawHitEffects(
   ctx: CanvasRenderingContext2D,
   canvas: HTMLCanvasElement,
@@ -904,6 +1338,124 @@ function drawHealEffects(
     ctx.textAlign = "center";
     ctx.fillStyle = "white";
     ctx.fillText(`+${effect.amount}`, x, y - radius * 0.25);
+    ctx.restore();
+  });
+}
+
+function drawDefenseShields(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  defenses: DefenseState[],
+  time: number,
+) {
+  defenses.forEach((defense, index) => {
+    const x = defense.center.x * canvas.width;
+    const y = defense.center.y * canvas.height;
+    const radius = defense.radius * Math.min(canvas.width, canvas.height);
+    const pulse = 0.5 + Math.sin(time / 110 + index * 1.7) * 0.5;
+
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.lineCap = "round";
+    ctx.shadowColor = "rgba(105, 245, 255, 0.95)";
+    ctx.shadowBlur = 24 + pulse * 18;
+
+    const gradient = ctx.createRadialGradient(
+      x,
+      y,
+      radius * 0.15,
+      x,
+      y,
+      radius * 1.12,
+    );
+
+    gradient.addColorStop(0, "rgba(255, 255, 255, 0.28)");
+    gradient.addColorStop(0.42, "rgba(102, 245, 255, 0.2)");
+    gradient.addColorStop(1, "rgba(63, 120, 255, 0)");
+
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(x, y, radius * 1.12, 0, Math.PI * 2);
+    ctx.fill();
+
+    for (let ring = 0; ring < 3; ring += 1) {
+      const ringProgress = (time / 720 + ring / 3) % 1;
+      const ringRadius = radius * (0.62 + ringProgress * 0.38);
+      const alpha = 0.72 * (1 - ringProgress);
+
+      ctx.strokeStyle = `rgba(190, 255, 255, ${alpha})`;
+      ctx.lineWidth = 5 - ringProgress * 2.5;
+      ctx.beginPath();
+      ctx.arc(x, y, ringRadius, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.92)";
+    ctx.lineWidth = 5 + pulse * 2;
+    ctx.beginPath();
+    ctx.arc(x, y, radius * 0.88, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.strokeStyle = "rgba(82, 214, 255, 0.78)";
+    ctx.lineWidth = 3;
+
+    for (let spoke = 0; spoke < 8; spoke += 1) {
+      const angle = time / 520 + spoke * (Math.PI / 4);
+      const inner = radius * 0.28;
+      const outer = radius * (0.84 + pulse * 0.04);
+
+      ctx.beginPath();
+      ctx.moveTo(x + Math.cos(angle) * inner, y + Math.sin(angle) * inner);
+      ctx.lineTo(x + Math.cos(angle) * outer, y + Math.sin(angle) * outer);
+      ctx.stroke();
+    }
+
+    ctx.font = `900 ${Math.max(18, radius * 0.22)}px Arial, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "rgba(255, 255, 255, 0.96)";
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.88)";
+    ctx.lineWidth = 6;
+    ctx.strokeText("GUARD", x, y);
+    ctx.fillText("GUARD", x, y);
+
+    ctx.restore();
+  });
+}
+
+function drawDefenseEffects(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  effects: DefenseEffect[],
+) {
+  effects.forEach((effect) => {
+    const alpha = effect.life / effect.maxLife;
+    const x = effect.x * canvas.width;
+    const y = effect.y * canvas.height;
+    const radius =
+      (0.08 + (1 - alpha) * 0.16) * Math.min(canvas.width, canvas.height);
+
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.globalAlpha = Math.min(1, alpha * 1.35);
+    ctx.strokeStyle = "rgba(185, 255, 255, 0.95)";
+    ctx.fillStyle = "rgba(86, 232, 255, 0.18)";
+    ctx.lineWidth = 7;
+    ctx.shadowColor = "rgba(102, 245, 255, 1)";
+    ctx.shadowBlur = 32;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.font = "900 30px Arial, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "white";
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.9)";
+    ctx.lineWidth = 5;
+    ctx.strokeText("BLOCK -1", x, y - radius * 0.15);
+    ctx.fillText("BLOCK -1", x, y - radius * 0.15);
     ctx.restore();
   });
 }
@@ -1087,21 +1639,6 @@ function isShockwaveCollidingWithTarget(
   );
 }
 
-function getTimerWinner(
-  player1Hp: number,
-  player2Hp: number,
-): BattleWinner | null {
-  if (player1Hp <= 0 && player2Hp > 0) {
-    return "PLAYER 2";
-  }
-
-  if (player2Hp <= 0 && player1Hp > 0) {
-    return "PLAYER 1";
-  }
-
-  return null;
-}
-
 function getFaceAttackState(face: Point[]) {
   const upper = face[13];
   const lower = face[14];
@@ -1171,9 +1708,21 @@ function getFaceTarget(face: Point[]) {
   };
 }
 
+function getMouthCenter(face: Point[]) {
+  const upperLip = face[13];
+  const lowerLip = face[14];
+
+  if (!upperLip || !lowerLip) {
+    return null;
+  }
+
+  return getMidPoint(upperLip, lowerLip);
+}
+
 function getBattlePlayers(
   faces: Point[][],
   attacks: FaceAttackState[],
+  maxPlayers: number,
 ): BattlePlayer[] {
   return faces
     .map((face, index) => {
@@ -1184,7 +1733,7 @@ function getBattlePlayers(
       }
 
       return {
-        id: index === 0 ? "player1" : "player2",
+        id: PLAYER_IDS[index],
         face,
         center: target.center,
         radius: target.radius,
@@ -1193,23 +1742,158 @@ function getBattlePlayers(
     })
     .filter((player): player is BattlePlayer => player !== null)
     .sort((a, b) => b.center.x - a.center.x)
-    .slice(0, 2)
+    .slice(0, maxPlayers)
     .map((player, index) => ({
       ...player,
-      id: index === 0 ? "player1" : "player2",
+      id: PLAYER_IDS[index],
     }));
 }
 
-function getOpponent(player: BattlePlayer, players: BattlePlayer[]) {
-  return players.find((candidate) => candidate.id !== player.id);
+function updateTrackedPlayerSlots(
+  detectedPlayers: BattlePlayer[],
+  previousSlots: Record<PlayerId, TrackedPlayerSlot>,
+  maxPlayers: number,
+  time: number,
+) {
+  const activePlayerIds = getActivePlayerIds(maxPlayers);
+  const nextSlots = createTrackedPlayerSlots();
+  const unmatchedPlayers = [...detectedPlayers];
+
+  activePlayerIds.forEach((playerId) => {
+    const previous = previousSlots[playerId];
+
+    nextSlots[playerId] = {
+      ...previous,
+      visible: false,
+      face: null,
+      attack: null,
+    };
+  });
+
+  activePlayerIds.forEach((playerId) => {
+    const previous = previousSlots[playerId];
+
+    if (!previous.registered || !previous.center || unmatchedPlayers.length === 0) {
+      return;
+    }
+
+    const nearest = unmatchedPlayers
+      .map((player, index) => ({
+        player,
+        index,
+        distance: distance(previous.center as Point, player.center),
+      }))
+      .sort((a, b) => a.distance - b.distance)[0];
+
+    if (!nearest || nearest.distance > FACE_TRACK_MAX_DISTANCE) {
+      return;
+    }
+
+    nextSlots[playerId] = {
+      ...previous,
+      face: nearest.player.face,
+      center: nearest.player.center,
+      radius: nearest.player.radius,
+      attack: nearest.player.attack,
+      registered: true,
+      visible: true,
+      lastSeenAt: time,
+    };
+    unmatchedPlayers.splice(nearest.index, 1);
+  });
+
+  activePlayerIds
+    .filter((playerId) => !nextSlots[playerId].registered)
+    .forEach((playerId) => {
+      const player = unmatchedPlayers.shift();
+
+      if (!player) {
+        return;
+      }
+
+      nextSlots[playerId] = {
+        id: playerId,
+        face: player.face,
+        center: player.center,
+        radius: player.radius,
+        attack: player.attack,
+        registered: true,
+        visible: true,
+        lastSeenAt: time,
+      };
+    });
+
+  PLAYER_IDS.filter((playerId) => !activePlayerIds.includes(playerId)).forEach(
+    (playerId) => {
+      nextSlots[playerId] = {
+        ...nextSlots[playerId],
+        registered: false,
+      };
+    },
+  );
+
+  return nextSlots;
+}
+
+function getVisibleBattlePlayers(
+  slots: Record<PlayerId, TrackedPlayerSlot>,
+): BattlePlayer[] {
+  return PLAYER_IDS.map((playerId) => slots[playerId])
+    .filter(
+      (slot) =>
+        slot.registered &&
+        slot.visible &&
+        slot.face !== null &&
+        slot.center !== null &&
+        slot.attack !== null,
+    )
+    .map((slot) => ({
+      id: slot.id,
+      face: slot.face as Point[],
+      center: slot.center as Point,
+      radius: slot.radius,
+      attack: slot.attack as FaceAttackState,
+    }));
+}
+
+function getOpponent(
+  player: BattlePlayer,
+  players: BattlePlayer[],
+  playerHp?: PlayerHp,
+) {
+  return players
+    .filter(
+      (candidate) =>
+        candidate.id !== player.id &&
+        (!playerHp || playerHp[candidate.id] > 0),
+    )
+    .sort(
+      (a, b) =>
+        distance(player.center, a.center) - distance(player.center, b.center),
+    )[0];
+}
+
+function getOpponents(
+  playerId: PlayerId,
+  players: BattlePlayer[],
+  playerHp?: PlayerHp,
+) {
+  return players.filter(
+    (candidate) =>
+      candidate.id !== playerId && (!playerHp || playerHp[candidate.id] > 0),
+  );
+}
+
+function getAttackPairKey(owner: PlayerId, target: PlayerId) {
+  return `${owner}:${target}`;
 }
 
 function getPlayerLabel(id: PlayerId) {
-  return id === "player1" ? "P1" : "P2";
+  return `P${PLAYER_IDS.indexOf(id) + 1}`;
 }
 
 function getPlayerColor(id: PlayerId) {
-  return id === "player1" ? "#53d4ff" : "#ff6b6b";
+  return PLAYER_COLORS[id];
 }
 
 function getHandAnchor(hand: Point[]) {
@@ -1312,6 +1996,43 @@ function assignHandsToPlayers(
   return assignments;
 }
 
+function getDefenseStates(assignments: HandAssignment[]): DefenseState[] {
+  return assignments
+    .map((assignment) => {
+      if (getHandShockwaveData(assignment.hands)) {
+        return null;
+      }
+
+      if (assignment.hands.some(isPeaceHand)) {
+        return null;
+      }
+
+      const defendingHands = assignment.hands.filter(isOpenPalmFacingCamera);
+
+      if (defendingHands.length === 0) {
+        return null;
+      }
+
+      const centers = defendingHands
+        .map(getPalmCenter)
+        .filter((center): center is Point => center !== null);
+
+      if (centers.length === 0) {
+        return null;
+      }
+
+      const center = getAveragePoint(centers);
+      const largestHandSize = Math.max(...defendingHands.map(getHandSize));
+
+      return {
+        playerId: assignment.player.id,
+        center,
+        radius: Math.max(0.08, largestHandSize * 0.95),
+      };
+    })
+    .filter((state): state is DefenseState => state !== null);
+}
+
 function getBattleBeamTarget(
   attacker: BattlePlayer,
   defender: BattlePlayer,
@@ -1336,70 +2057,135 @@ function App() {
 
   const streamRef = useRef<MediaStream | null>(null);
 
+  const audioContextRef = useRef<AudioContext | null>(null);
+
+  const audioAnalyserRef = useRef<AnalyserNode | null>(null);
+
+  const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+
+  const audioDataRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
+
+  const audioAnimationRef = useRef<number | null>(null);
+
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+
+  const recognitionShouldRunRef = useRef(false);
+
   const animationRef = useRef<number | null>(null);
 
   const lastTimeRef = useRef(-1);
+
+  const detectionPreviousTimeRef = useRef(0);
 
   const punchStatesRef = useRef<PunchHandState[]>([]);
 
   const fireballsRef = useRef<Fireball[]>([]);
 
+  const voiceTextAttacksRef = useRef<VoiceTextAttack[]>([]);
+
+  const latestVoiceAttackTargetRef = useRef<VoiceAttackTarget | null>(null);
+
+  const latestVoiceTargetsRef = useRef<
+    Partial<Record<PlayerId, VoiceAttackTarget>>
+  >({});
+
+  const voiceMouthRatiosRef = useRef<Record<PlayerId, number>>(
+    createPlayerNumberRecord(0),
+  );
+
+  const voiceMouthActivityRef = useRef<Record<PlayerId, number>>(
+    createPlayerNumberRecord(0),
+  );
+
+  const speakingVoiceTargetRef = useRef<VoiceAttackTarget | null>(null);
+
+  const voiceSessionActiveRef = useRef(false);
+
+  const voiceUtteranceFiredRef = useRef(false);
+
+  const voiceLastSoundAtRef = useRef(0);
+
+  const lastVoiceAttackAtRef = useRef(0);
+
+  const lastVoiceAttackTextRef = useRef("");
+
+  const recentVoiceAttackTextsRef = useRef<{ text: string; at: number }[]>([]);
+
+  const micLevelRef = useRef(0);
+
   const hitEffectsRef = useRef<HitEffect[]>([]);
 
   const healEffectsRef = useRef<HealEffect[]>([]);
 
+  const defenseEffectsRef = useRef<DefenseEffect[]>([]);
+
+  const defenseStatesRef = useRef<DefenseState[]>([]);
+
   const lightningEffectsRef = useRef<LightningEffect[]>([]);
+
+  const trackedPlayerSlotsRef = useRef<Record<PlayerId, TrackedPlayerSlot>>(
+    createTrackedPlayerSlots(),
+  );
+
+  const lastMissingDamageRef = useRef<Record<PlayerId, number>>(
+    createPlayerNumberRecord(0),
+  );
 
   const attackRecordsRef = useRef<AttackRecord[]>([]);
 
   const nextAttackIdRef = useRef(1);
 
+  const bestWazaEntriesRef = useRef<Record<string, BestWazaEntry>>({});
+
   const battleStartedRef = useRef(false);
 
-  const lastBeamDamageRef = useRef<Record<PlayerId, number>>({
-    player1: 0,
-    player2: 0,
-  });
+  const lastBeamDamageRef = useRef<Record<string, number>>({});
 
-  const lastShockwaveDamageRef = useRef<Record<PlayerId, number>>({
-    player1: 0,
-    player2: 0,
-  });
+  const lastShockwaveDamageRef = useRef<Record<string, number>>({});
 
   const damageFlashUntilRef = useRef<Record<PlayerId, number>>({
-    player1: 0,
-    player2: 0,
+    ...createPlayerNumberRecord(0),
   });
 
   const thunderChargeStartedRef = useRef<Record<PlayerId, number | null>>({
-    player1: null,
-    player2: null,
+    ...createPlayerNullableNumberRecord(null),
   });
 
   const thunderCooldownUntilRef = useRef<Record<PlayerId, number>>({
-    player1: 0,
-    player2: 0,
+    ...createPlayerNumberRecord(0),
   });
 
   const healChargeStartedRef = useRef<Record<PlayerId, number | null>>({
-    player1: null,
-    player2: null,
+    ...createPlayerNullableNumberRecord(null),
   });
 
   const healCooldownUntilRef = useRef<Record<PlayerId, number>>({
-    player1: 0,
-    player2: 0,
+    ...createPlayerNumberRecord(0),
   });
 
-  const [playerHP, setPlayerHP] = useState(MAX_HP);
+  const [playerHp, setPlayerHp] = useState<PlayerHp>(() => createPlayerHp());
 
-  const [player2HP, setPlayer2HP] = useState(MAX_HP);
+  const playerHpRef = useRef<PlayerHp>(createPlayerHp());
 
   const [battleWinner, setBattleWinner] = useState<BattleWinner | null>(null);
 
+  const [bestWaza, setBestWaza] = useState<BestWazaEntry | null>(null);
+
   const [cameraStarted, setCameraStarted] = useState(false);
 
-  const [modelReady, setModelReady] = useState(false);
+  const [micStarted, setMicStarted] = useState(false);
+
+  const [micLevel, setMicLevel] = useState(0);
+
+  const [speechSupported, setSpeechSupported] = useState(true);
+
+  const [speechListening, setSpeechListening] = useState(false);
+
+  const [speechStatus, setSpeechStatus] = useState("待機中");
+
+  const [voiceTranscripts, setVoiceTranscripts] = useState<
+    Record<PlayerId, string>
+  >(() => createPlayerStringRecord(""));
 
   const [hands, setHands] = useState(0);
 
@@ -1408,8 +2194,6 @@ function App() {
   const [faceCount, setFaceCount] = useState(0);
 
   const [playerMarkers, setPlayerMarkers] = useState<PlayerMarker[]>([]);
-
-  const [mouthOpen, setMouthOpen] = useState(false);
 
   const [leftEyeOpen, setLeftEyeOpen] = useState(false);
 
@@ -1431,12 +2215,23 @@ function App() {
 
   const [status, setStatus] = useState("カメラを起動してください");
 
+  const updatePlayerHp = (updater: (current: PlayerHp) => PlayerHp) => {
+    setPlayerHp((current) => {
+      const next = updater(current);
+
+      playerHpRef.current = next;
+
+      return next;
+    });
+  };
+
   const applySettings = (nextSettings: BattleSettings) => {
     setMaxPlayers(nextSettings.maxPlayers);
     setMaxHands(nextSettings.maxHands);
     setShowJointGuides(nextSettings.showJointGuides);
 
     saveBattleSettings(nextSettings);
+    resetBattleState();
 
     if (cameraStarted) {
       initializeModels(nextSettings.maxPlayers, nextSettings.maxHands);
@@ -1444,45 +2239,54 @@ function App() {
   };
 
   const resetBattleState = () => {
-    setPlayerHP(MAX_HP);
-    setPlayer2HP(MAX_HP);
+    const initialHp = createPlayerHp();
+
+    playerHpRef.current = initialHp;
+    setPlayerHp(initialHp);
     setBattleWinner(null);
     battleStartedRef.current = false;
-    lastBeamDamageRef.current = {
-      player1: 0,
-      player2: 0,
-    };
-    lastShockwaveDamageRef.current = {
-      player1: 0,
-      player2: 0,
-    };
-    damageFlashUntilRef.current = {
-      player1: 0,
-      player2: 0,
-    };
+    lastBeamDamageRef.current = {};
+    lastShockwaveDamageRef.current = {};
+    damageFlashUntilRef.current = createPlayerNumberRecord(0);
     attackRecordsRef.current = [];
     nextAttackIdRef.current = 1;
+    bestWazaEntriesRef.current = {};
+    setBestWaza(null);
+    lastVoiceAttackTextRef.current = "";
+    voiceSessionActiveRef.current = false;
+    voiceUtteranceFiredRef.current = false;
+    speakingVoiceTargetRef.current = null;
+    voiceLastSoundAtRef.current = 0;
+    recentVoiceAttackTextsRef.current = [];
+    voiceMouthRatiosRef.current = createPlayerNumberRecord(0);
+    voiceMouthActivityRef.current = createPlayerNumberRecord(0);
     fireballsRef.current = [];
+    voiceTextAttacksRef.current = [];
     hitEffectsRef.current = [];
     healEffectsRef.current = [];
+    defenseEffectsRef.current = [];
+    defenseStatesRef.current = [];
     lightningEffectsRef.current = [];
-    thunderChargeStartedRef.current = {
-      player1: null,
-      player2: null,
-    };
-    thunderCooldownUntilRef.current = {
-      player1: 0,
-      player2: 0,
-    };
-    healChargeStartedRef.current = {
-      player1: null,
-      player2: null,
-    };
-    healCooldownUntilRef.current = {
-      player1: 0,
-      player2: 0,
-    };
+    trackedPlayerSlotsRef.current = createTrackedPlayerSlots();
+    lastMissingDamageRef.current = createPlayerNumberRecord(0);
+    thunderChargeStartedRef.current = createPlayerNullableNumberRecord(null);
+    thunderCooldownUntilRef.current = createPlayerNumberRecord(0);
+    healChargeStartedRef.current = createPlayerNullableNumberRecord(null);
+    healCooldownUntilRef.current = createPlayerNumberRecord(0);
+    setVoiceTranscripts(createPlayerStringRecord(""));
     setPlayerMarkers([]);
+  };
+
+  const restartBattleLoop = () => {
+    if (
+      cameraStarted &&
+      !animationRef.current &&
+      handLandmarkerRef.current &&
+      poseLandmarkerRef.current &&
+      faceLandmarkerRef.current
+    ) {
+      startDetection();
+    }
   };
 
   useEffect(() => {
@@ -1497,9 +2301,339 @@ function App() {
   // カメラ
   // --------------------------------
 
+  const updateMicLevel = useCallback(() => {
+    const analyser = audioAnalyserRef.current;
+    const data = audioDataRef.current;
+
+    if (!analyser || !data) {
+      return;
+    }
+
+    analyser.getByteTimeDomainData(data);
+
+    let sum = 0;
+
+    for (const value of data) {
+      const centered = (value - 128) / 128;
+      sum += centered * centered;
+    }
+
+    const rms = Math.sqrt(sum / data.length);
+
+    const nextLevel = Math.min(100, Math.round(rms * 260));
+    const now = performance.now();
+
+    micLevelRef.current = nextLevel;
+    setMicLevel(nextLevel);
+
+    if (nextLevel >= VOICE_SOUND_START_LEVEL) {
+      voiceLastSoundAtRef.current = now;
+
+      if (!voiceSessionActiveRef.current) {
+        voiceSessionActiveRef.current = true;
+        voiceUtteranceFiredRef.current = false;
+        lastVoiceAttackTextRef.current = "";
+        speakingVoiceTargetRef.current = chooseVoiceTargetFromMouthActivity();
+      }
+    } else if (
+      voiceSessionActiveRef.current &&
+      nextLevel <= VOICE_SOUND_END_LEVEL &&
+      now - voiceLastSoundAtRef.current > VOICE_SILENCE_RESET_TIME
+    ) {
+      voiceSessionActiveRef.current = false;
+      voiceUtteranceFiredRef.current = false;
+      speakingVoiceTargetRef.current = null;
+      lastVoiceAttackTextRef.current = "";
+    }
+
+    audioAnimationRef.current = requestAnimationFrame(updateMicLevel);
+  }, []);
+
+  const stopMicMonitor = useCallback(() => {
+    if (audioAnimationRef.current) {
+      cancelAnimationFrame(audioAnimationRef.current);
+      audioAnimationRef.current = null;
+    }
+
+    audioSourceRef.current?.disconnect();
+    audioSourceRef.current = null;
+    audioAnalyserRef.current = null;
+    audioDataRef.current = null;
+    setMicStarted(false);
+    setMicLevel(0);
+
+    void audioContextRef.current?.close();
+    audioContextRef.current = null;
+  }, []);
+
+  const stopSpeechRecognition = useCallback(() => {
+    recognitionShouldRunRef.current = false;
+    voiceSessionActiveRef.current = false;
+    voiceUtteranceFiredRef.current = false;
+    speakingVoiceTargetRef.current = null;
+    lastVoiceAttackTextRef.current = "";
+    recentVoiceAttackTextsRef.current = [];
+
+    const recognition = recognitionRef.current;
+
+    if (!recognition) {
+      return;
+    }
+
+    recognition.onend = null;
+    recognition.onstart = null;
+    recognition.onresult = null;
+    recognition.onerror = null;
+    recognition.abort();
+    recognitionRef.current = null;
+    setSpeechListening(false);
+    setSpeechStatus("停止中");
+  }, []);
+
+  const setPlayerTranscript = (playerId: PlayerId, text: string) => {
+    setVoiceTranscripts((current) => ({
+      ...current,
+      [playerId]: text,
+    }));
+  };
+
+  const clearPlayerTranscriptSoon = (playerId: PlayerId, text: string) => {
+    window.setTimeout(() => {
+      setVoiceTranscripts((current) => {
+        if (current[playerId] !== text) {
+          return current;
+        }
+
+        return {
+          ...current,
+          [playerId]: "",
+        };
+      });
+    }, 450);
+  };
+
+  const chooseVoiceTargetFromMouthActivity = () => {
+    const candidates = getActivePlayerIds(maxPlayers)
+      .map((playerId) => {
+        const target = latestVoiceTargetsRef.current[playerId];
+
+        if (!target) {
+          return null;
+        }
+
+        return {
+          target,
+          score:
+            voiceMouthActivityRef.current[playerId] +
+            voiceMouthRatiosRef.current[playerId] * 0.9,
+        };
+      })
+      .filter(
+        (candidate): candidate is { target: VoiceAttackTarget; score: number } =>
+          candidate !== null,
+      )
+      .sort((a, b) => b.score - a.score);
+
+    return candidates[0]?.target ?? latestVoiceAttackTargetRef.current;
+  };
+
+  const getCurrentVoiceTarget = (): VoiceAttackTarget | null =>
+    speakingVoiceTargetRef.current ??
+    chooseVoiceTargetFromMouthActivity() ??
+    getActivePlayerIds(maxPlayers)
+      .map((playerId) => latestVoiceTargetsRef.current[playerId])
+      .find((target): target is VoiceAttackTarget => target !== undefined) ??
+    null;
+
+  const lockVoiceTargetIfNeeded = () => {
+    if (!speakingVoiceTargetRef.current) {
+      speakingVoiceTargetRef.current = chooseVoiceTargetFromMouthActivity();
+    }
+
+    if (!voiceSessionActiveRef.current) {
+      voiceSessionActiveRef.current = true;
+      voiceUtteranceFiredRef.current = false;
+      lastVoiceAttackTextRef.current = "";
+      voiceLastSoundAtRef.current = performance.now();
+    }
+  };
+
+  const isRecentlyFiredVoiceText = (text: string, now: number) => {
+    recentVoiceAttackTextsRef.current =
+      recentVoiceAttackTextsRef.current.filter((item) => now - item.at < 2600);
+
+    return recentVoiceAttackTextsRef.current.some(
+      (item) =>
+        text === item.text ||
+        text.startsWith(item.text) ||
+        item.text.startsWith(text),
+    );
+  };
+
+  const startSpeechRecognition = () => {
+    const SpeechRecognition =
+      (window as SpeechRecognitionWindow).SpeechRecognition ??
+      (window as SpeechRecognitionWindow).webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      setSpeechSupported(false);
+      setSpeechListening(false);
+      setSpeechStatus("このブラウザは音声認識に未対応です");
+      return;
+    }
+
+    stopSpeechRecognition();
+
+    const recognition = new SpeechRecognition();
+
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = "ja-JP";
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => {
+      setSpeechListening(true);
+      setSpeechStatus("聞き取り中");
+    };
+
+    recognition.onresult = (event) => {
+      let interimTranscript = "";
+
+      for (
+        let index = event.resultIndex;
+        index < event.results.length;
+        index += 1
+      ) {
+        const result = event.results[index];
+        const text = result[0]?.transcript.trim() ?? "";
+
+        if (!text) {
+          continue;
+        }
+
+        if (result.isFinal) {
+          lockVoiceTargetIfNeeded();
+          const target = getCurrentVoiceTarget();
+
+          if (!target?.eyesClosed) {
+            setSpeechStatus("目を閉じるとVOICEに入ります");
+            continue;
+          }
+
+          const owner = target.owner;
+          setPlayerTranscript(owner, text);
+          setSpeechStatus("認識しました");
+          if (triggerVoiceTextAttack(text)) {
+            clearPlayerTranscriptSoon(owner, text);
+          }
+        } else {
+          interimTranscript = text;
+        }
+      }
+
+      if (interimTranscript) {
+        lockVoiceTargetIfNeeded();
+        const target = getCurrentVoiceTarget();
+
+        if (!target?.eyesClosed) {
+          setSpeechStatus("目を閉じるとVOICEに入ります");
+          return;
+        }
+
+        const owner = target.owner;
+        setPlayerTranscript(owner, interimTranscript);
+        setSpeechStatus("聞き取り中");
+      }
+    };
+
+    recognition.onerror = (event) => {
+      const error = event.error ?? "unknown";
+
+      if (
+        error === "not-allowed" ||
+        error === "service-not-allowed"
+      ) {
+        recognitionShouldRunRef.current = false;
+        setSpeechListening(false);
+        setStatus("音声認識の利用が許可されていません");
+        setSpeechStatus("音声認識が許可されていません");
+        return;
+      }
+
+      if (error === "no-speech") {
+        setSpeechStatus("声を待っています");
+        return;
+      }
+
+      setSpeechStatus(`音声認識エラー: ${error}`);
+    };
+
+    recognition.onend = () => {
+      setSpeechListening(false);
+
+      if (!recognitionShouldRunRef.current) {
+        return;
+      }
+
+      setSpeechStatus("聞き取りを再開中");
+
+      window.setTimeout(() => {
+        try {
+          recognition.start();
+          setSpeechListening(true);
+        } catch (error) {
+          console.error("音声認識の再開に失敗しました:", error);
+        }
+      }, 250);
+    };
+
+    recognitionRef.current = recognition;
+    recognitionShouldRunRef.current = true;
+    setSpeechSupported(true);
+
+    try {
+      recognition.start();
+      setSpeechStatus("聞き取りを開始しました");
+    } catch (error) {
+      console.error("音声認識の起動に失敗しました:", error);
+      setSpeechListening(false);
+      setSpeechStatus("音声認識を開始できませんでした");
+    }
+  };
+
+  const startMicMonitor = async (stream: MediaStream) => {
+    const audioTrack = stream.getAudioTracks()[0];
+
+    if (!audioTrack) {
+      setMicStarted(false);
+      setMicLevel(0);
+      return;
+    }
+
+    stopMicMonitor();
+
+    const audioContext = new AudioContext();
+    const analyser = audioContext.createAnalyser();
+    const source = audioContext.createMediaStreamSource(
+      new MediaStream([audioTrack]),
+    );
+
+    analyser.fftSize = 1024;
+    source.connect(analyser);
+
+    audioContextRef.current = audioContext;
+    audioAnalyserRef.current = analyser;
+    audioSourceRef.current = source;
+    audioDataRef.current = new Uint8Array(analyser.fftSize);
+
+    setMicStarted(true);
+    updateMicLevel();
+  };
+
   const startCamera = async () => {
     try {
-      setStatus("カメラを起動中...");
+      setStatus("カメラ・マイクを起動中...");
+      resetBattleState();
 
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -1511,7 +2645,11 @@ function App() {
             ideal: 720,
           },
         },
-        audio: false,
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
       });
 
       streamRef.current = stream;
@@ -1525,15 +2663,22 @@ function App() {
 
       await videoRef.current.play();
 
+      await startMicMonitor(stream);
+
+      startSpeechRecognition();
+
       setCameraStarted(true);
 
-      setStatus("カメラ起動完了。認識モデルを読み込み中...");
+      setStatus("カメラ・マイク起動完了。認識モデルを読み込み中...");
 
       initializeModels();
     } catch (error) {
       console.error(error);
 
-      setStatus("カメラを起動できませんでした");
+      stopSpeechRecognition();
+      setMicStarted(false);
+      setMicLevel(0);
+      setStatus("カメラまたはマイクを起動できませんでした");
     }
   };
 
@@ -1564,8 +2709,6 @@ function App() {
     handLimit = maxHands,
   ) => {
     try {
-      setModelReady(false);
-
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
         animationRef.current = null;
@@ -1661,8 +2804,6 @@ function App() {
 
       faceLandmarkerRef.current = faceLandmarker;
 
-      setModelReady(true);
-
       setStatus("SYSTEM READY");
 
       startDetection();
@@ -1731,19 +2872,114 @@ function App() {
     ].slice(-6);
   };
 
+  const spawnDefenseEffect = (
+    target: PlayerId,
+    hitX?: number,
+    hitY?: number,
+  ) => {
+    const defense = defenseStatesRef.current.find(
+      (state) => state.playerId === target,
+    );
+
+    defenseEffectsRef.current = [
+      ...defenseEffectsRef.current,
+      {
+        x: hitX ?? defense?.center.x ?? 0.5,
+        y: hitY ?? defense?.center.y ?? 0.5,
+        life: 520,
+        maxLife: 520,
+        target,
+      },
+    ].slice(-10);
+  };
+
+  const captureCurrentBattleFrame = () => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+
+    if (!video || !canvas || video.videoWidth === 0 || video.videoHeight === 0) {
+      return null;
+    }
+
+    const snapshot = document.createElement("canvas");
+    snapshot.width = 640;
+    snapshot.height = Math.round((video.videoHeight / video.videoWidth) * 640);
+
+    const ctx = snapshot.getContext("2d");
+
+    if (!ctx) {
+      return null;
+    }
+
+    ctx.translate(snapshot.width, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(video, 0, 0, snapshot.width, snapshot.height);
+    ctx.drawImage(canvas, 0, 0, snapshot.width, snapshot.height);
+
+    return snapshot.toDataURL("image/jpeg", 0.82);
+  };
+
+  const getCurrentBestWaza = () =>
+    Object.values(bestWazaEntriesRef.current).sort(
+      (a, b) => b.damage - a.damage || b.updatedAt - a.updatedAt,
+    )[0] ?? null;
+
+  const registerWazaDamage = (
+    attackId: number | undefined,
+    damage: number,
+    time: number,
+  ) => {
+    if (!attackId || damage <= 0) {
+      return;
+    }
+
+    const attack = attackRecordsRef.current.find(
+      (record) => record.id === attackId,
+    );
+
+    if (!attack || !isDamageAttackType(attack.type)) {
+      return;
+    }
+
+    const key = `${attack.owner}:${attack.type}`;
+    const current = bestWazaEntriesRef.current[key];
+    const photo = attack.photo ?? captureCurrentBattleFrame();
+
+    bestWazaEntriesRef.current = {
+      ...bestWazaEntriesRef.current,
+      [key]: {
+        key,
+        type: attack.type,
+        owner: attack.owner,
+        damage: (current?.damage ?? 0) + damage,
+        attackId: attack.id,
+        attackCount:
+          current && current.attackId === attack.id
+            ? current.attackCount
+            : (current?.attackCount ?? 0) + 1,
+        photo: photo ?? current?.photo ?? null,
+        updatedAt: time,
+      },
+    };
+  };
+
   const recordAttack = (
     type: AttackRecord["type"],
     owner: PlayerId,
     target: PlayerId | null,
     time: number,
+    reuseWindow = 700,
   ) => {
-    const recent = attackRecordsRef.current.findLast(
-      (attack) =>
-        attack.type === type &&
-        attack.owner === owner &&
-        attack.target === target &&
-        time - attack.startedAt < 700,
-    );
+    const recent =
+      reuseWindow > 0
+        ? attackRecordsRef.current.findLast(
+            (attack) =>
+              attack.type === type &&
+              attack.owner === owner &&
+              attack.target === target &&
+              time - attack.startedAt < reuseWindow,
+          )
+        : null;
 
     if (recent) {
       return recent;
@@ -1756,6 +2992,7 @@ function App() {
       target,
       startedAt: time,
       lastHitAt: null,
+      photo: captureCurrentBattleFrame(),
     };
 
     nextAttackIdRef.current += 1;
@@ -1775,12 +3012,105 @@ function App() {
     );
   };
 
+  const triggerVoiceTextAttack = (text: string): PlayerId | null => {
+    if (battleWinner) {
+      return null;
+    }
+
+    const trimmedText = text.trim().replace(/\s+/g, " ");
+    const target = getCurrentVoiceTarget();
+    const now = performance.now();
+    const utteranceLockActive =
+      voiceUtteranceFiredRef.current &&
+      now - lastVoiceAttackAtRef.current < 900;
+    const textLooksLikeSameUtterance =
+      lastVoiceAttackTextRef.current !== "" &&
+      (trimmedText.startsWith(lastVoiceAttackTextRef.current) ||
+        lastVoiceAttackTextRef.current.startsWith(trimmedText));
+
+    if (
+      !trimmedText ||
+      !target ||
+      !target.eyesClosed ||
+      utteranceLockActive ||
+      isRecentlyFiredVoiceText(trimmedText, now) ||
+      (textLooksLikeSameUtterance &&
+        now - lastVoiceAttackAtRef.current < 1200) ||
+      now - lastVoiceAttackAtRef.current < VOICE_ATTACK_COOLDOWN
+    ) {
+      return null;
+    }
+
+    const levelRatio = Math.min(1, Math.max(0.18, micLevelRef.current / 100));
+    const attack = recordAttack("voice", target.owner, target.target, now, 0);
+    const fontSize = Math.round(58 + levelRatio * 96);
+    const letters = Array.from(trimmedText.replace(/\s+/g, "")).slice(0, 14);
+    const direction = getNormalizedDirection(target.start, target.targetCenter);
+    const perpendicular = {
+      x: -direction.y,
+      y: direction.x,
+    };
+
+    voiceTextAttacksRef.current = [
+      ...voiceTextAttacksRef.current,
+      ...letters.map((letter, index) => {
+        const spread = (index - (letters.length - 1) / 2) * 0.055;
+        const seed = Math.random() * 1000;
+        const startX = target.start.x + perpendicular.x * spread;
+        const startY = target.start.y + perpendicular.y * spread;
+        const initialSpeed = 0.00016 + levelRatio * 0.00016;
+
+        return {
+          text: letter,
+          x: startX,
+          y: startY,
+          vx:
+            direction.x * initialSpeed +
+            perpendicular.x * Math.sin(seed) * 0.0001,
+          vy:
+            direction.y * initialSpeed +
+            perpendicular.y * Math.cos(seed) * 0.0001,
+          startX,
+          startY,
+          targetX: target.targetCenter.x,
+          targetY: target.targetCenter.y,
+          fontSize: Math.round(fontSize * (0.86 + (index % 3) * 0.08)),
+          radius: 0.035 + levelRatio * 0.06,
+          damage: VOICE_CHARACTER_DAMAGE,
+          delay: index * 82,
+          seed,
+          life: VOICE_ATTACK_LIFE + index * 82,
+          maxLife: VOICE_ATTACK_LIFE + index * 82,
+          owner: target.owner,
+          target: target.target,
+          attackId: attack.id,
+          color: getPlayerColor(target.owner),
+        };
+      }),
+    ].slice(-36);
+
+    lastVoiceAttackAtRef.current = now;
+    lastVoiceAttackTextRef.current = trimmedText;
+    recentVoiceAttackTextsRef.current = [
+      ...recentVoiceAttackTextsRef.current,
+      {
+        text: trimmedText,
+        at: now,
+      },
+    ].slice(-8);
+    voiceSessionActiveRef.current = true;
+    voiceUtteranceFiredRef.current = true;
+    speakingVoiceTargetRef.current = target;
+    voiceLastSoundAtRef.current = now;
+    return target.owner;
+  };
+
   const triggerThunderAttack = (
     attacker: BattlePlayer,
     defender: BattlePlayer,
     time: number,
   ) => {
-    const attack = recordAttack("thunder", attacker.id, defender.id, time);
+    const attack = recordAttack("thunder", attacker.id, defender.id, time, 0);
 
     markAttackHit(attack.id, time);
 
@@ -1792,6 +3122,7 @@ function App() {
       defender.center.x,
       defender.center.y,
       "#f8fbff",
+      attack.id,
     );
 
     thunderCooldownUntilRef.current[attacker.id] = time + THUNDER_COOLDOWN;
@@ -1803,17 +3134,16 @@ function App() {
       return;
     }
 
-    if (player.id === "player1") {
-      setPlayerHP((current) => Math.min(MAX_HP, current + amount));
-    } else {
-      setPlayer2HP((current) => Math.min(MAX_HP, current + amount));
-    }
+    updatePlayerHp((current) => ({
+      ...current,
+      [player.id]: Math.min(MAX_HP, current[player.id] + amount),
+    }));
 
     spawnHealEffect(player, amount);
   };
 
   const triggerHeal = (player: BattlePlayer, time: number) => {
-    const attack = recordAttack("heal", player.id, player.id, time);
+    const attack = recordAttack("heal", player.id, player.id, time, 0);
 
     markAttackHit(attack.id, time);
 
@@ -1829,6 +3159,7 @@ function App() {
     hitX?: number,
     hitY?: number,
     hitColor?: string,
+    attackId?: number,
   ) => {
     if (battleWinner) {
       return;
@@ -1836,46 +3167,199 @@ function App() {
 
     battleStartedRef.current = true;
 
-    if (target === "player2") {
-      setPlayer2HP((current) => {
-        const next = Math.max(0, current - amount);
+    const defending = defenseStatesRef.current.some(
+      (state) => state.playerId === target,
+    );
+    const finalAmount = defending ? DEFENSE_DAMAGE : amount;
 
-        if (hitX !== undefined && hitY !== undefined) {
-          spawnHitEffect(hitX, hitY, hitColor ?? "#ff6b6b", amount, target);
-        }
+    if (defending) {
+      spawnDefenseEffect(target, hitX, hitY);
+    }
 
-        damageFlashUntilRef.current[target] =
-          performance.now() + DAMAGE_FLASH_TIME;
+    const current = playerHpRef.current;
 
-        const winner = getTimerWinner(playerHP, next);
-
-        if (winner) {
-          setBattleWinner(winner);
-        }
-
-        return next;
-      });
+    if (current[target] <= 0) {
       return;
     }
 
-    setPlayerHP((current) => {
-      const next = Math.max(0, current - amount);
+    const actualDamage = Math.min(current[target], finalAmount);
+    const nextHp = {
+      ...current,
+      [target]: current[target] - actualDamage,
+    };
 
-      if (hitX !== undefined && hitY !== undefined) {
-        spawnHitEffect(hitX, hitY, hitColor ?? "#53d4ff", amount, target);
-      }
+    playerHpRef.current = nextHp;
+    setPlayerHp(nextHp);
+    registerWazaDamage(attackId, actualDamage, performance.now());
 
+    if (!defending && hitX !== undefined && hitY !== undefined) {
+      spawnHitEffect(
+        hitX,
+        hitY,
+        hitColor ?? getPlayerColor(target),
+        actualDamage,
+        target,
+      );
+    }
+
+    if (!defending) {
       damageFlashUntilRef.current[target] =
         performance.now() + DAMAGE_FLASH_TIME;
+    }
 
-      const winner = getTimerWinner(next, player2HP);
+    const winner = getBattleWinner(
+      nextHp,
+      getRegisteredPlayerIds(trackedPlayerSlotsRef.current, maxPlayers),
+    );
 
-      if (winner) {
-        setBattleWinner(winner);
+    if (winner) {
+      setBestWaza(getCurrentBestWaza());
+      setBattleWinner(winner);
+    }
+  };
+
+  const applyMissingFaceDamage = (
+    slots: Record<PlayerId, TrackedPlayerSlot>,
+    time: number,
+  ) => {
+    getActivePlayerIds(maxPlayers).forEach((playerId) => {
+      const slot = slots[playerId];
+
+      if (
+        !slot.registered ||
+        slot.visible ||
+        playerHpRef.current[playerId] <= 0 ||
+        time - lastMissingDamageRef.current[playerId] <
+          FACE_MISSING_DAMAGE_INTERVAL
+      ) {
+        return;
       }
 
-      return next;
+      lastMissingDamageRef.current[playerId] = time;
+
+      applyBattleDamage(
+        playerId,
+        FACE_MISSING_DAMAGE,
+        slot.center?.x,
+        slot.center?.y,
+        getPlayerColor(playerId),
+      );
     });
+  };
+
+  const updateVoiceTextAttacks = (
+    time: number,
+    battlePlayers: BattlePlayer[],
+    frameDelta: number,
+  ) => {
+    const hitVoiceAttacks = new Set<number>();
+
+    voiceTextAttacksRef.current = voiceTextAttacksRef.current
+      .map((attack) => {
+        if (attack.delay > 0) {
+          return {
+            ...attack,
+            delay: attack.delay - frameDelta,
+          };
+        }
+
+        const defender = battlePlayers.find(
+          (player) => player.id === attack.target,
+        );
+        const nextLife = attack.life - frameDelta;
+        const targetX = defender?.center.x ?? attack.targetX;
+        const targetY = defender?.center.y ?? attack.targetY;
+        const toTargetX = targetX - attack.x;
+        const toTargetY = targetY - attack.y;
+        const targetDistance = Math.hypot(toTargetX, toTargetY);
+        const direction =
+          targetDistance > 0.001
+            ? {
+                x: toTargetX / targetDistance,
+                y: toTargetY / targetDistance,
+              }
+            : {
+                x: 0,
+                y: 0,
+              };
+        const desiredSpeed = 0.00034 + (attack.fontSize / 100) * 0.00015;
+        const steer = Math.min(0.22, frameDelta / 120);
+        const nextVx =
+          attack.vx + (direction.x * desiredSpeed - attack.vx) * steer;
+        const nextVy =
+          attack.vy + (direction.y * desiredSpeed - attack.vy) * steer;
+        const wobble =
+          Math.sin(time / 70 + attack.seed) *
+          Math.min(0.00022, desiredSpeed * 0.36);
+        const nextX = attack.x + (nextVx + -direction.y * wobble) * frameDelta;
+        const nextY = attack.y + (nextVy + direction.x * wobble) * frameDelta;
+
+        return {
+          ...attack,
+          x: nextX,
+          y: nextY,
+          vx: nextVx,
+          vy: nextVy,
+          targetX,
+          targetY,
+          life: nextLife,
+        };
+      })
+      .filter(
+        (attack) =>
+          (attack.life > 0 || attack.delay > 0) &&
+          attack.x > -0.35 &&
+          attack.x < 1.35 &&
+          attack.y > -0.35 &&
+          attack.y < 1.35,
+      );
+
+    voiceTextAttacksRef.current.forEach((attack, attackIndex) => {
+      if (attack.delay > 0) {
+        return;
+      }
+
+      const defender = battlePlayers.find(
+        (player) => player.id === attack.target,
+      );
+
+      if (!defender) {
+        return;
+      }
+
+      const hit = isCircleCollidingWithTarget(
+        {
+          x: attack.x,
+          y: attack.y,
+          z: 0,
+        },
+        attack.radius,
+        defender.center,
+        defender.radius,
+      );
+
+      if (!hit) {
+        return;
+      }
+
+      hitVoiceAttacks.add(attackIndex);
+      markAttackHit(attack.attackId, time);
+
+      applyBattleDamage(
+        defender.id,
+        attack.damage,
+        defender.center.x,
+        defender.center.y,
+        attack.color,
+        attack.attackId,
+      );
+    });
+
+    if (hitVoiceAttacks.size > 0) {
+      voiceTextAttacksRef.current = voiceTextAttacksRef.current.filter(
+        (_, index) => !hitVoiceAttacks.has(index),
+      );
+    }
   };
 
   const updatePunchFireballs = (
@@ -1955,26 +3439,25 @@ function App() {
         return;
       }
 
-      const defender = battlePlayers.find(
-        (player) => player.id !== fireball.owner,
+      const fireballCenter = {
+        x: fireball.x,
+        y: fireball.y,
+        z: 0,
+      };
+      const defender = getOpponents(
+        fireball.owner,
+        battlePlayers,
+        playerHpRef.current,
+      ).find((candidate) =>
+        isCircleCollidingWithTarget(
+          fireballCenter,
+          fireball.radius,
+          candidate.center,
+          candidate.radius,
+        ),
       );
 
       if (!defender) {
-        return;
-      }
-
-      const hit = isCircleCollidingWithTarget(
-        {
-          x: fireball.x,
-          y: fireball.y,
-          z: 0,
-        },
-        fireball.radius,
-        defender.center,
-        defender.radius,
-      );
-
-      if (!hit) {
         return;
       }
 
@@ -1986,10 +3469,11 @@ function App() {
 
       applyBattleDamage(
         defender.id,
-        FIREBALL_DAMAGE,
+        fireball.damage,
         defender.center.x,
         defender.center.y,
         getPlayerColor(defender.id),
+        fireball.attackId ?? undefined,
       );
     });
 
@@ -1999,18 +3483,24 @@ function App() {
       );
     }
 
+    const fireballChargeByPlayer = createPlayerNumberRecord(0);
+
     trackedHands.forEach((hand, handIndex) => {
       const owner = trackedHandEntries[handIndex]?.owner ?? null;
 
       const center = getFistCenter(hand);
+      const peaceHand = isPeaceHand(hand);
 
-      const isPunchReady = isFist(hand) && fistsAreSeparated && center;
+      const isPunchReady =
+        !peaceHand && isFist(hand) && fistsAreSeparated && center;
 
       if (!punchStates[handIndex]) {
         punchStates[handIndex] = {
           previousCenter: null,
           previousSize: 0,
           previousTime: time,
+          chargeAnchor: null,
+          punchReadyUntil: 0,
           trajectory: [],
           charge: 0,
           cooldown: 0,
@@ -2028,8 +3518,10 @@ function App() {
         state.previousCenter = center;
         state.previousSize = handSize;
         state.previousTime = time;
+        state.chargeAnchor = null;
+        state.punchReadyUntil = 0;
         state.trajectory = center ? [center] : [];
-        state.charge = fistsAreSeparated ? state.charge : 0;
+        state.charge = 0;
         state.ready = false;
         return;
       }
@@ -2058,6 +3550,23 @@ function App() {
         MIN_PUNCH_MOVE_DISTANCE,
         handSize * MIN_PUNCH_MOVE_SCALE,
       );
+      const stillMoveBuffer = Math.max(PUNCH_STILL_MOVE_BUFFER, handSize * 0.1);
+      const isStill = movementDistance <= stillMoveBuffer;
+
+      if (isStill) {
+        state.charge = Math.min(MAX_PUNCH_CHARGE, state.charge + deltaTime);
+        state.chargeAnchor = state.chargeAnchor
+          ? {
+              x: state.chargeAnchor.x * 0.88 + center.x * 0.12,
+              y: state.chargeAnchor.y * 0.88 + center.y * 0.12,
+              z: state.chargeAnchor.z * 0.88 + center.z * 0.12,
+            }
+          : center;
+
+        if (state.charge >= MIN_PUNCH_CHARGE) {
+          state.punchReadyUntil = time + PUNCH_READY_BUFFER_TIME;
+        }
+      }
 
       const lastTrajectoryPoint = state.trajectory[state.trajectory.length - 1];
 
@@ -2074,33 +3583,30 @@ function App() {
         state.trajectory,
       );
 
-      const growthSpeed =
-        state.previousSize > 0
-          ? (handSize - state.previousSize) / deltaTime
-          : 0;
+      const punchAnchor = state.chargeAnchor ?? state.previousCenter ?? center;
+      const releaseDistance = distance(punchAnchor, center);
+      const punchWindowActive =
+        state.charge >= MIN_PUNCH_CHARGE || time <= state.punchReadyUntil;
 
-      state.charge = Math.min(MAX_PUNCH_CHARGE, state.charge + deltaTime);
-
-      state.ready = true;
+      state.ready = punchWindowActive && state.cooldown === 0;
 
       if (
-        (speed > 0.00065 || growthSpeed > 0.00018) &&
-        movementDistance > minPunchMoveDistance &&
+        !isStill &&
+        punchWindowActive &&
+        speed > 0.00055 &&
+        releaseDistance > minPunchMoveDistance &&
         trajectoryStraightness > MIN_PUNCH_STRAIGHTNESS &&
-        state.charge > MIN_PUNCH_CHARGE &&
         state.cooldown === 0
       ) {
-        const direction = getNormalizedDirection(
-          state.previousCenter ?? center,
-          center,
-        );
+        const direction = getNormalizedDirection(punchAnchor, center);
 
-        const chargeRatio = Math.min(1, state.charge / MAX_PUNCH_CHARGE);
+        const chargeLevel = getFireballChargeLevel(state.charge);
+        const fireballStats = getFireballLevelStats(state.charge);
 
-        const fireballSpeed = Math.min(0.0024, Math.max(0.0009, speed * 0.55));
+        const fireballSpeed = Math.min(0.0026, Math.max(0.001, speed * 0.72));
 
         const attack = owner
-          ? recordAttack("fireball", owner, null, time)
+          ? recordAttack("fireball", owner, null, time, 0)
           : null;
 
         fireballsRef.current = [
@@ -2110,7 +3616,9 @@ function App() {
             y: center.y,
             vx: direction.x * fireballSpeed,
             vy: direction.y * fireballSpeed,
-            radius: 0.035 + chargeRatio * 0.075,
+            radius: fireballStats.radius,
+            damage: fireballStats.damage,
+            chargeLevel,
             life: 1700,
             maxLife: 1700,
             owner,
@@ -2120,17 +3628,33 @@ function App() {
 
         state.charge = 0;
         state.cooldown = PUNCH_COOLDOWN;
+        state.chargeAnchor = null;
+        state.punchReadyUntil = 0;
         state.trajectory = [center];
+      } else if (!isStill && time > state.punchReadyUntil) {
+        state.charge = 0;
+        state.chargeAnchor = center;
+        state.trajectory = [center];
+      }
+
+      if (owner && state.cooldown === 0 && state.charge > 0) {
+        fireballChargeByPlayer[owner] = Math.max(
+          fireballChargeByPlayer[owner],
+          state.charge,
+        );
       }
 
       state.previousCenter = center;
       state.previousSize = handSize;
       state.previousTime = time;
     });
+
+    return fireballChargeByPlayer;
   };
 
   const detect = () => {
     if (battleWinner) {
+      animationRef.current = null;
       return;
     }
 
@@ -2153,6 +3677,12 @@ function App() {
 
       // eslint-disable-next-line react-hooks/purity
       const now = performance.now();
+      const frameDelta =
+        detectionPreviousTimeRef.current > 0
+          ? Math.min(50, now - detectionPreviousTimeRef.current)
+          : 16;
+
+      detectionPreviousTimeRef.current = now;
 
       // 手
       const handResult = handLandmarker.detectForVideo(video, now);
@@ -2171,17 +3701,97 @@ function App() {
 
       const faceAttackStates = faceResult.faceLandmarks.map(getFaceAttackState);
 
-      const battlePlayers = getBattlePlayers(
+      const detectedBattlePlayers = getBattlePlayers(
         faceResult.faceLandmarks,
         faceAttackStates,
+        maxPlayers,
       );
+      const trackedPlayerSlots = updateTrackedPlayerSlots(
+        detectedBattlePlayers,
+        trackedPlayerSlotsRef.current,
+        maxPlayers,
+        now,
+      );
+      const battlePlayers = getVisibleBattlePlayers(trackedPlayerSlots);
+
+      trackedPlayerSlotsRef.current = trackedPlayerSlots;
+
+      const activeBattlePlayers = battlePlayers.filter(
+        (player) => playerHpRef.current[player.id] > 0,
+      );
+
+      applyMissingFaceDamage(trackedPlayerSlots, now);
+
+      const voiceTargets = battlePlayers.reduce<
+        Partial<Record<PlayerId, VoiceAttackTarget>>
+      >((targets, player) => {
+        if (playerHpRef.current[player.id] <= 0) {
+          return targets;
+        }
+
+        const defender = getOpponent(
+          player,
+          activeBattlePlayers,
+          playerHpRef.current,
+        );
+        const start = getMouthCenter(player.face);
+
+        if (!defender || !start) {
+          return targets;
+        }
+
+        targets[player.id] = {
+          owner: player.id,
+          target: defender.id,
+          start,
+          targetCenter: defender.center,
+          targetRadius: defender.radius,
+          eyesClosed: !player.attack.leftEyeOpen && !player.attack.rightEyeOpen,
+        };
+
+        return targets;
+      }, {});
+      const voiceAttacker =
+        activeBattlePlayers
+          .filter((player) => player.attack.mouthOpen)
+          .sort((a, b) => b.attack.mouthRatio - a.attack.mouthRatio)[0] ??
+        activeBattlePlayers[0];
+
+      latestVoiceTargetsRef.current = voiceTargets;
+      battlePlayers.forEach((player) => {
+        const previousRatio = voiceMouthRatiosRef.current[player.id];
+        const mouthDelta = Math.abs(player.attack.mouthRatio - previousRatio);
+        const openBoost = player.attack.mouthOpen
+          ? Math.max(0, player.attack.mouthRatio - 0.18) * 0.8
+          : 0;
+
+        voiceMouthActivityRef.current[player.id] =
+          voiceMouthActivityRef.current[player.id] *
+            VOICE_MOUTH_ACTIVITY_DECAY +
+          mouthDelta * VOICE_MOUTH_ACTIVITY_WEIGHT +
+          openBoost;
+        voiceMouthRatiosRef.current[player.id] = player.attack.mouthRatio;
+      });
+      latestVoiceAttackTargetRef.current = voiceAttacker
+        ? voiceTargets[voiceAttacker.id] ?? null
+        : null;
 
       const handAssignments = assignHandsToPlayers(
         handResult.landmarks,
-        battlePlayers,
+        activeBattlePlayers,
       );
 
-      updatePunchFireballs(now, handAssignments, battlePlayers);
+      const defenseStates = getDefenseStates(handAssignments);
+
+      defenseStatesRef.current = defenseStates;
+
+      const fireballChargeByPlayer = updatePunchFireballs(
+        now,
+        handAssignments,
+        activeBattlePlayers,
+      );
+
+      updateVoiceTextAttacks(now, activeBattlePlayers, frameDelta);
 
       const thunderChargingPlayers = new Set<PlayerId>();
       const healChargingPlayers = new Set<PlayerId>();
@@ -2226,7 +3836,11 @@ function App() {
           thunderChargeStartedRef.current[assignment.player.id] = now;
         }
 
-        const defender = getOpponent(assignment.player, battlePlayers);
+        const defender = getOpponent(
+          assignment.player,
+          activeBattlePlayers,
+          playerHpRef.current,
+        );
 
         if (!defender) {
           return;
@@ -2244,48 +3858,74 @@ function App() {
         }
       });
 
+      const shockwaveAssignments = handAssignments.filter(
+        (assignment) => !thunderChargingPlayers.has(assignment.player.id),
+      );
+
       const activePlayer = battlePlayers.find(
-        (player) => player.attack.beamActive,
+        (player) =>
+          playerHpRef.current[player.id] > 0 && player.attack.beamActive,
       );
 
       const displayFaceState = activePlayer?.attack ?? faceAttackStates[0];
 
       setPlayerMarkers(
-        battlePlayers.map((player) => {
-          const thunderStarted = thunderChargeStartedRef.current[player.id];
-          const healStarted = healChargeStartedRef.current[player.id];
+        getActivePlayerIds(maxPlayers)
+          .map((playerId) => trackedPlayerSlots[playerId])
+          .filter(
+            (slot) =>
+              slot.registered && slot.center !== null && playerHpRef.current[slot.id] > 0,
+          )
+          .map((slot) => {
+            const player = battlePlayers.find(
+              (candidate) => candidate.id === slot.id,
+            );
+            const thunderStarted = thunderChargeStartedRef.current[slot.id];
+            const healStarted = healChargeStartedRef.current[slot.id];
+            const alive = playerHpRef.current[slot.id] > 0;
 
           return {
             handCount:
               handAssignments.find(
-                (assignment) => assignment.player.id === player.id,
+                (assignment) => assignment.player.id === slot.id,
               )?.hands.length ?? 0,
-            id: player.id,
-            x: 1 - player.center.x,
-            y: Math.max(0.08, player.center.y - player.radius),
-            damaged: now < damageFlashUntilRef.current[player.id],
+            id: slot.id,
+            x: 1 - (slot.center as Point).x,
+            y: Math.max(0.08, (slot.center as Point).y - slot.radius),
+            damaged: now < damageFlashUntilRef.current[slot.id],
             attacking:
-              player.attack.beamActive ||
-              thunderChargingPlayers.has(player.id) ||
-              healChargingPlayers.has(player.id),
-            chargingThunder: thunderChargingPlayers.has(player.id),
+              alive &&
+              ((player?.attack.beamActive ?? false) ||
+                thunderChargingPlayers.has(slot.id) ||
+                healChargingPlayers.has(slot.id)),
+            defending: defenseStates.some(
+              (state) => state.playerId === slot.id,
+            ),
+            chargingThunder: thunderChargingPlayers.has(slot.id),
             thunderProgress:
               thunderStarted === null
                 ? 0
                 : Math.min(1, (now - thunderStarted) / THUNDER_CHARGE_TIME),
-            chargingHeal: healChargingPlayers.has(player.id),
+            chargingHeal: healChargingPlayers.has(slot.id),
             healProgress:
               healStarted === null
                 ? 0
                 : Math.min(1, (now - healStarted) / HEAL_CHARGE_TIME),
+            missing: !slot.visible,
+            fireballChargeLevel:
+              fireballChargeByPlayer[slot.id] >= MIN_PUNCH_CHARGE
+                ? getFireballChargeLevel(fireballChargeByPlayer[slot.id])
+                : 0,
+            fireballChargeProgress: getFireballChargeProgress(
+              fireballChargeByPlayer[slot.id],
+            ),
           };
-        }),
+          }),
       );
 
       setMouthRatio(displayFaceState?.mouthRatio ?? 0);
       setLeftEyeRatio(displayFaceState?.leftEyeRatio ?? 0);
       setRightEyeRatio(displayFaceState?.rightEyeRatio ?? 0);
-      setMouthOpen(displayFaceState?.mouthOpen ?? false);
       setLeftEyeOpen(displayFaceState?.leftEyeOpen ?? false);
       setRightEyeOpen(displayFaceState?.rightEyeOpen ?? false);
 
@@ -2310,58 +3950,71 @@ function App() {
         }))
         .filter((effect) => effect.life > 0);
 
-      handAssignments.forEach((assignment) => {
+      defenseEffectsRef.current = defenseEffectsRef.current
+        .map((effect) => ({
+          ...effect,
+          life: effect.life - 16,
+        }))
+        .filter((effect) => effect.life > 0);
+
+      shockwaveAssignments.forEach((assignment) => {
         const shockwave = getHandShockwaveData(assignment.hands);
 
         if (!shockwave) {
           return;
         }
 
-        const defender = getOpponent(assignment.player, battlePlayers);
-
-        if (!defender) {
-          return;
-        }
-
-        const attack = recordAttack(
-          "shockwave",
+        getOpponents(
           assignment.player.id,
-          defender.id,
-          now,
-        );
-
-        const hit = isShockwaveCollidingWithTarget(
-          shockwave.center,
-          shockwave.direction,
-          shockwave.strength,
-          defender.center,
-          defender.radius,
-        );
-
-        if (
-          hit &&
-          now - lastShockwaveDamageRef.current[defender.id] >=
-            SHOCKWAVE_DAMAGE_COOLDOWN
-        ) {
-          lastShockwaveDamageRef.current[defender.id] = now;
-          markAttackHit(attack.id, now);
-
-          applyBattleDamage(
+          activeBattlePlayers,
+          playerHpRef.current,
+        ).forEach((defender) => {
+          const attack = recordAttack(
+            "shockwave",
+            assignment.player.id,
             defender.id,
-            SHOCKWAVE_DAMAGE,
-            defender.center.x,
-            defender.center.y,
-            getPlayerColor(defender.id),
+            now,
           );
-        }
+
+          const hit = isShockwaveCollidingWithTarget(
+            shockwave.center,
+            shockwave.direction,
+            shockwave.strength,
+            defender.center,
+            defender.radius,
+          );
+          const damageKey = getAttackPairKey(assignment.player.id, defender.id);
+
+          if (
+            hit &&
+            now - (lastShockwaveDamageRef.current[damageKey] ?? 0) >=
+              SHOCKWAVE_DAMAGE_COOLDOWN
+          ) {
+            lastShockwaveDamageRef.current[damageKey] = now;
+            markAttackHit(attack.id, now);
+
+            applyBattleDamage(
+              defender.id,
+              SHOCKWAVE_DAMAGE,
+              defender.center.x,
+              defender.center.y,
+              getPlayerColor(defender.id),
+              attack.id,
+            );
+          }
+        });
       });
 
-      battlePlayers.forEach((attacker) => {
+      activeBattlePlayers.forEach((attacker) => {
         if (!attacker.attack.beamActive) {
           return;
         }
 
-        const defender = getOpponent(attacker, battlePlayers);
+        const defender = getOpponent(
+          attacker,
+          activeBattlePlayers,
+          playerHpRef.current,
+        );
 
         if (!defender) {
           return;
@@ -2381,20 +4034,23 @@ function App() {
             defender.center,
             defender.radius,
           );
+          const damageKey = getAttackPairKey(attacker.id, defender.id);
 
           if (
             hit &&
-            now - lastBeamDamageRef.current[defender.id] >= BEAM_DAMAGE_COOLDOWN
+            now - (lastBeamDamageRef.current[damageKey] ?? 0) >=
+              BEAM_DAMAGE_COOLDOWN
           ) {
-            lastBeamDamageRef.current[defender.id] = now;
+            lastBeamDamageRef.current[damageKey] = now;
             markAttackHit(attack.id, now);
 
             applyBattleDamage(
               defender.id,
-              8,
+              BEAM_DAMAGE,
               defender.center.x,
               defender.center.y,
               getPlayerColor(defender.id),
+              attack.id,
             );
           }
         }
@@ -2407,6 +4063,8 @@ function App() {
         faceAttackStates,
         handAssignments,
         battlePlayers,
+        defenseStates,
+        thunderChargingPlayers,
         fireballsRef.current,
         now,
         showJointGuides,
@@ -2427,6 +4085,8 @@ function App() {
     faceAttackStates: FaceAttackState[],
     handAssignments: HandAssignment[],
     battlePlayers: BattlePlayer[],
+    defenseStates: DefenseState[],
+    thunderChargingPlayers: Set<PlayerId>,
     fireballs: Fireball[],
     time: number,
     showGuides: boolean,
@@ -2513,11 +4173,19 @@ function App() {
     // 手・指
     // ----------------------------
 
-    handAssignments.forEach((assignment) =>
-      drawHandShockwave(ctx, canvas, assignment.hands, time),
-    );
+    handAssignments
+      .filter((assignment) => !thunderChargingPlayers.has(assignment.player.id))
+      .forEach((assignment) =>
+        drawHandShockwave(ctx, canvas, assignment.hands, time),
+      );
 
     drawFireballs(ctx, canvas, fireballs, time);
+
+    drawVoiceTextAttacks(ctx, canvas, voiceTextAttacksRef.current, time);
+
+    drawDefenseShields(ctx, canvas, defenseStates, time);
+
+    drawDefenseEffects(ctx, canvas, defenseEffectsRef.current);
 
     drawHitEffects(ctx, canvas, hitEffectsRef.current);
 
@@ -2665,13 +4333,17 @@ function App() {
 
       streamRef.current?.getTracks().forEach((track) => track.stop());
 
+      stopSpeechRecognition();
+
+      stopMicMonitor();
+
       handLandmarkerRef.current?.close();
 
       poseLandmarkerRef.current?.close();
 
       faceLandmarkerRef.current?.close();
     };
-  }, []);
+  }, [stopMicMonitor, stopSpeechRecognition]);
 
   return (
     <div className="app">
@@ -2692,13 +4364,37 @@ function App() {
             <div className="battle-result-screen">
               <div className="battle-result-card">
                 <div className="battle-result-title">決着</div>
-                <div className="battle-result-winner">{battleWinner} WIN</div>
+                <div className="battle-result-winner">
+                  {getPlayerLabel(battleWinner)} WIN
+                </div>
                 <div className="battle-result-sub">HPが残っている方の勝ち</div>
+                {bestWaza && (
+                  <div className="best-waza">
+                    <div className="best-waza-label">Best WAZA</div>
+                    {bestWaza.photo && (
+                      <img
+                        src={bestWaza.photo}
+                        alt={`${getPlayerLabel(bestWaza.owner)} ${WAZA_LABELS[bestWaza.type]}`}
+                      />
+                    )}
+                    <div className="best-waza-name">
+                      {getPlayerLabel(bestWaza.owner)} /{" "}
+                      {WAZA_LABELS[bestWaza.type]}
+                    </div>
+                    <div className="best-waza-damage">
+                      {bestWaza.damage} DAMAGE
+                    </div>
+                    <div className="best-waza-id">
+                      WAZA ID {bestWaza.key} / LAST #{bestWaza.attackId}
+                    </div>
+                  </div>
+                )}
                 <button
                   type="button"
                   className="rematch-button"
                   onClick={() => {
                     resetBattleState();
+                    restartBattleLoop();
                     setStatus("再戦開始");
                   }}
                 >
@@ -2713,14 +4409,15 @@ function App() {
           <p className="subtitle">ULTIMATE ATTACK SYSTEM</p>
 
           <div className="status-row">
-            <div className="tiny-panel">
-              <span>PLAYER 1 HP</span>
-              <strong>{playerHP}</strong>
-            </div>
-            <div className="tiny-panel player2-panel">
-              <span>PLAYER 2 HP</span>
-              <strong>{player2HP}</strong>
-            </div>
+            {getActivePlayerIds(maxPlayers).map((playerId) => (
+              <div
+                key={playerId}
+                className={`tiny-panel ${playerId}-panel`}
+              >
+                <span>{getPlayerLabel(playerId)} HP</span>
+                <strong>{playerHp[playerId]}</strong>
+              </div>
+            ))}
           </div>
 
           <div className="camera">
@@ -2728,9 +4425,9 @@ function App() {
               <div className="start">
                 <h2>全身を構えろ</h2>
 
-                <p>手・指・顔・全身を認識</p>
+                <p>手・指・顔・全身・音声を認識</p>
 
-                <button onClick={startCamera}>カメラを起動</button>
+                <button onClick={startCamera}>カメラ・マイクを起動</button>
               </div>
             )}
 
@@ -2748,6 +4445,8 @@ function App() {
                   marker.id,
                   marker.damaged ? "damaged" : "",
                   marker.attacking ? "attacking" : "",
+                  marker.defending ? "defending" : "",
+                  marker.missing ? "missing" : "",
                 ].join(" ")}
                 style={{
                   left: `${marker.x * 100}%`,
@@ -2756,12 +4455,40 @@ function App() {
               >
                 <span>{getPlayerLabel(marker.id)}</span>
                 <small>
-                  {marker.chargingHeal
-                    ? "HEAL"
-                    : marker.chargingThunder
-                      ? "THUNDER"
+                  {marker.defending
+                    ? "GUARD"
+                    : marker.missing
+                      ? "MISSING"
+                    : marker.chargingHeal
+                      ? "HEAL"
+                      : marker.chargingThunder
+                        ? "THUNDER"
                       : `${marker.handCount} HANDS`}
                 </small>
+                {marker.fireballChargeProgress > 0 && !marker.missing && (
+                  <div
+                    className={[
+                      "fireball-charge",
+                      marker.fireballChargeLevel > 0 ? "ready" : "",
+                    ].join(" ")}
+                  >
+                    <strong>
+                      {marker.fireballChargeLevel > 0
+                        ? `FIRE Lv${marker.fireballChargeLevel}`
+                        : "FIRE"}
+                    </strong>
+                    <div aria-hidden="true">
+                      {FIREBALL_LEVELS.map((_, index) => (
+                        <b
+                          key={index}
+                          className={
+                            index < marker.fireballChargeLevel ? "filled" : ""
+                          }
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {(marker.chargingThunder || marker.chargingHeal) && (
                   <div
                     className={
@@ -2781,12 +4508,6 @@ function App() {
                 )}
               </div>
             ))}
-
-            {modelReady && (
-              <div className={`mouth-status ${mouthOpen ? "open" : "closed"}`}>
-                {mouthOpen ? "OPEN" : "CLOSED"}
-              </div>
-            )}
           </div>
 
           <div className="info">
@@ -2814,10 +4535,51 @@ function App() {
               </strong>
             </div>
 
-            <div>
-              <span>MOUTH</span>
+            <div className={micStarted ? "mic-panel active" : "mic-panel"}>
+              <span>MIC</span>
 
-              <strong>{mouthOpen ? "OPEN" : "CLOSED"}</strong>
+              <strong>{micStarted ? `${micLevel}%` : "OFF"}</strong>
+
+              <div className="mic-meter" aria-hidden="true">
+                <b style={{ width: `${micLevel}%` }} />
+              </div>
+            </div>
+
+            <div
+              className={
+                speechListening ? "speech-panel active" : "speech-panel"
+              }
+            >
+              <span>SPEECH</span>
+
+              <strong>
+                {!speechSupported ? "NO" : speechListening ? "ON" : "OFF"}
+              </strong>
+            </div>
+          </div>
+
+          <div className="voice-transcripts">
+            {getActivePlayerIds(maxPlayers).map((playerId) => (
+              <div
+                key={playerId}
+                className={`voice-transcript ${playerId}-voice`}
+              >
+                <span>{getPlayerLabel(playerId)} VOICE</span>
+                <strong>{voiceTranscripts[playerId] || "..."}</strong>
+              </div>
+            ))}
+
+            <div className="speech-control">
+              <small>{speechStatus}</small>
+              {cameraStarted && speechSupported && !speechListening && (
+                <button
+                  type="button"
+                  className="speech-start-button"
+                  onClick={startSpeechRecognition}
+                >
+                  音声認識を開始
+                </button>
+              )}
             </div>
           </div>
 
@@ -2838,9 +4600,9 @@ function App() {
           </div>
 
           <div className="instruction">
-            手・指・顔・全身
+            手・指・顔・全身・声
             <br />
-            <strong>全部使って必殺技を放て。</strong>
+            <strong>目を閉じて言葉を放て。</strong>
           </div>
         </>
       )}
