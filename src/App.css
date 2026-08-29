@@ -156,41 +156,29 @@ button {
 
 .info {
   width: min(1100px, 100%);
-
   margin: 25px auto;
-
   display: grid;
-
   grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
-
   gap: 15px;
 }
 
 .info div {
   padding: 20px;
-
   background: #0d0d0d;
-
   border: 1px solid #333;
-
   border-radius: 15px;
 }
 
 .info span {
   display: block;
-
   color: #666;
-
   font-size: 12px;
-
   letter-spacing: 3px;
 }
 
 .info strong {
   display: block;
-
   margin-top: 10px;
-
   font-size: 24px;
 }
 
