@@ -263,6 +263,22 @@ button {
   color: #ff6b6b;
 }
 
+.player3-voice {
+  border-color: rgba(88, 255, 154, 0.46);
+}
+
+.player3-voice span {
+  color: #58ff9a;
+}
+
+.player4-voice {
+  border-color: rgba(255, 204, 102, 0.5);
+}
+
+.player4-voice span {
+  color: #ffcc66;
+}
+
 .voice-transcript strong {
   display: block;
   margin-top: 6px;
@@ -296,7 +312,7 @@ button {
   z-index: 8;
   transform: translate(-50%, -110%);
   min-width: 74px;
-  height: 42px;
+  min-height: 42px;
   display: grid;
   place-items: center;
   gap: 4px;
@@ -344,6 +360,14 @@ button {
 
 .player-marker.player2 {
   color: #ff6b6b;
+}
+
+.player-marker.player3 {
+  color: #58ff9a;
+}
+
+.player-marker.player4 {
+  color: #ffcc66;
 }
 
 .player-marker.attacking span {
@@ -418,6 +442,50 @@ button {
   box-shadow: 0 0 18px rgba(88, 255, 154, 0.95);
 }
 
+.fireball-charge {
+  position: relative;
+  width: 108px;
+  padding: 5px 7px 6px;
+  border: 1px solid rgba(255, 144, 58, 0.7);
+  border-radius: 8px;
+  background: rgba(20, 10, 4, 0.82);
+  box-shadow: 0 0 14px rgba(255, 94, 28, 0.36);
+}
+
+.fireball-charge strong {
+  display: block;
+  margin-bottom: 4px;
+  color: #ffd28a;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: 1px;
+  text-shadow: 0 0 7px rgba(255, 78, 0, 0.9);
+}
+
+.fireball-charge div {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 3px;
+  height: 7px;
+}
+
+.fireball-charge b {
+  display: block;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.fireball-charge b.filled {
+  background: linear-gradient(90deg, #ff5c14, #ffdf6e);
+  box-shadow: 0 0 10px rgba(255, 126, 32, 0.95);
+}
+
+.fireball-charge.ready {
+  border-color: rgba(255, 216, 104, 0.95);
+  box-shadow: 0 0 20px rgba(255, 114, 28, 0.65);
+}
+
 .player-marker.damaged::before {
   border-color: #ff2b2b;
   background: rgba(255, 0, 0, 0.2);
@@ -430,6 +498,29 @@ button {
 .player-marker.damaged span {
   background: rgba(180, 0, 0, 0.88);
   border-color: #ff2b2b;
+}
+
+.player-marker.missing {
+  opacity: 0.78;
+}
+
+.player-marker.missing::before {
+  border-style: dashed;
+  border-color: #ffcc66;
+  background: rgba(255, 84, 84, 0.13);
+  box-shadow:
+    0 0 26px rgba(255, 120, 80, 0.8),
+    inset 0 0 28px rgba(255, 120, 80, 0.32);
+}
+
+.player-marker.missing span {
+  background: rgba(95, 34, 18, 0.9);
+  border-color: #ffcc66;
+}
+
+.player-marker.missing small {
+  background: rgba(92, 18, 18, 0.9);
+  color: #ffe7ba;
 }
 
 .instruction {
@@ -483,6 +574,14 @@ button {
 
 .player2-panel {
   border-color: rgba(255, 120, 80, 0.8);
+}
+
+.player3-panel {
+  border-color: rgba(88, 255, 154, 0.72);
+}
+
+.player4-panel {
+  border-color: rgba(255, 204, 102, 0.76);
 }
 
 .settings-screen {
@@ -673,33 +772,6 @@ button {
   .settings-item .toggle {
     max-width: none;
   }
-}
-
-.mouth-status {
-  position: absolute;
-
-  top: 20px;
-  right: 20px;
-
-  padding: 15px 25px;
-
-  border-radius: 999px;
-
-  background: rgba(0, 0, 0, 0.85);
-
-  font-size: 28px;
-
-  font-weight: bold;
-
-  letter-spacing: 4px;
-}
-
-.mouth-status.open {
-  border: 2px solid #ff3366;
-}
-
-.mouth-status.closed {
-  border: 2px solid #777;
 }
 
 .mouth-debug {

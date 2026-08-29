@@ -27,7 +27,11 @@ type Vector2 = {
   y: number;
 };
 
-type PlayerId = "player1" | "player2";
+const PLAYER_IDS = ["player1", "player2", "player3", "player4"] as const;
+
+type PlayerId = (typeof PLAYER_IDS)[number];
+
+type PlayerHp = Record<PlayerId, number>;
 
 type Fireball = {
   x: number;
@@ -35,6 +39,8 @@ type Fireball = {
   vx: number;
   vy: number;
   radius: number;
+  damage: number;
+  chargeLevel: number;
   life: number;
   maxLife: number;
   owner: PlayerId | null;
@@ -105,6 +111,8 @@ type PunchHandState = {
   previousCenter: Point | null;
   previousSize: number;
   previousTime: number;
+  chargeAnchor: Point | null;
+  punchReadyUntil: number;
   trajectory: Point[];
   charge: number;
   cooldown: number;
@@ -113,11 +121,21 @@ type PunchHandState = {
 
 const FINGER_TIPS = [4, 8, 12, 16, 20];
 const OPEN_HAND_TIPS = [8, 12, 16, 20];
-const MAX_PUNCH_CHARGE = 1800;
-const MIN_PUNCH_CHARGE = 120;
+const MAX_PUNCH_CHARGE = 3000;
+const MIN_PUNCH_CHARGE = 500;
+const FIREBALL_CHARGE_STAGE_TIME = 500;
+const FIREBALL_LEVELS = [
+  { radius: 0.04, damage: 8 },
+  { radius: 0.055, damage: 12 },
+  { radius: 0.072, damage: 17 },
+  { radius: 0.09, damage: 23 },
+  { radius: 0.112, damage: 30 },
+] as const;
 const MIN_FIST_DISTANCE = 0.14;
-const MIN_PUNCH_MOVE_SCALE = 0.18;
-const MIN_PUNCH_MOVE_DISTANCE = 0.012;
+const MIN_PUNCH_MOVE_SCALE = 0.32;
+const MIN_PUNCH_MOVE_DISTANCE = 0.04;
+const PUNCH_STILL_MOVE_BUFFER = 0.018;
+const PUNCH_READY_BUFFER_TIME = 480;
 const MIN_PUNCH_STRAIGHTNESS = 0.58;
 const PUNCH_COOLDOWN = 520;
 const BEAM_DAMAGE = 6;
@@ -126,7 +144,6 @@ const SHOCKWAVE_DAMAGE_COOLDOWN = 650;
 const DAMAGE_FLASH_TIME = 650;
 const BEAM_TARGET_RADIUS_MIN = 0.075;
 const BEAM_TARGET_RADIUS_SCALE = 0.52;
-const FIREBALL_DAMAGE = 12;
 const SHOCKWAVE_DAMAGE = 3;
 const SHOCKWAVE_HIT_RADIUS = 0.16;
 const THUNDER_DAMAGE = 32;
@@ -148,9 +165,112 @@ const VOICE_MOUTH_ACTIVITY_WEIGHT = 18;
 const DEFENSE_DAMAGE = 1;
 const DEFENSE_MIN_HAND_SIZE = 0.045;
 const DEFENSE_MAX_PALM_Z_SPREAD = 0.09;
+const FACE_TRACK_MAX_DISTANCE = 0.28;
+const FACE_MISSING_DAMAGE = 5;
+const FACE_MISSING_DAMAGE_INTERVAL = 1500;
 const MAX_HP = 300;
 
-type BattleWinner = "PLAYER 1" | "PLAYER 2";
+type BattleWinner = PlayerId;
+
+const PLAYER_COLORS: Record<PlayerId, string> = {
+  player1: "#53d4ff",
+  player2: "#ff6b6b",
+  player3: "#58ff9a",
+  player4: "#ffcc66",
+};
+
+function getActivePlayerIds(maxPlayers: number) {
+  return PLAYER_IDS.slice(0, maxPlayers);
+}
+
+function createPlayerHp(): PlayerHp {
+  return PLAYER_IDS.reduce(
+    (hp, playerId) => ({
+      ...hp,
+      [playerId]: MAX_HP,
+    }),
+    {} as PlayerHp,
+  );
+}
+
+function createPlayerNumberRecord(value: number): Record<PlayerId, number> {
+  return PLAYER_IDS.reduce(
+    (record, playerId) => ({
+      ...record,
+      [playerId]: value,
+    }),
+    {} as Record<PlayerId, number>,
+  );
+}
+
+function createPlayerNullableNumberRecord(
+  value: number | null,
+): Record<PlayerId, number | null> {
+  return PLAYER_IDS.reduce(
+    (record, playerId) => ({
+      ...record,
+      [playerId]: value,
+    }),
+    {} as Record<PlayerId, number | null>,
+  );
+}
+
+function createPlayerStringRecord(value: string): Record<PlayerId, string> {
+  return PLAYER_IDS.reduce(
+    (record, playerId) => ({
+      ...record,
+      [playerId]: value,
+    }),
+    {} as Record<PlayerId, string>,
+  );
+}
+
+function createTrackedPlayerSlots(): Record<PlayerId, TrackedPlayerSlot> {
+  return PLAYER_IDS.reduce(
+    (slots, playerId) => ({
+      ...slots,
+      [playerId]: {
+        id: playerId,
+        face: null,
+        center: null,
+        radius: BEAM_TARGET_RADIUS_MIN,
+        attack: null,
+        registered: false,
+        visible: false,
+        lastSeenAt: 0,
+      },
+    }),
+    {} as Record<PlayerId, TrackedPlayerSlot>,
+  );
+}
+
+function getBattleWinner(
+  playerHp: PlayerHp,
+  activePlayerIds: PlayerId[],
+): BattleWinner | null {
+  const alivePlayers = activePlayerIds.filter(
+    (playerId) => playerHp[playerId] > 0,
+  );
+
+  return alivePlayers.length === 1 ? alivePlayers[0] : null;
+}
+
+function getFireballChargeLevel(chargeTime: number) {
+  const extraChargeTime = Math.max(0, chargeTime - MIN_PUNCH_CHARGE);
+
+  return Math.min(
+    FIREBALL_LEVELS.length,
+    Math.floor(extraChargeTime / FIREBALL_CHARGE_STAGE_TIME) + 1,
+  );
+}
+
+function getFireballLevelStats(chargeTime: number) {
+  return FIREBALL_LEVELS[getFireballChargeLevel(chargeTime) - 1];
+}
+
+function getFireballChargeProgress(chargeTime: number) {
+  return Math.min(1, Math.max(0, chargeTime / MAX_PUNCH_CHARGE));
+}
 
 type FaceAttackState = ReturnType<typeof getFaceAttackState>;
 
@@ -160,6 +280,17 @@ type BattlePlayer = {
   center: Point;
   radius: number;
   attack: FaceAttackState;
+};
+
+type TrackedPlayerSlot = {
+  id: PlayerId;
+  face: Point[] | null;
+  center: Point | null;
+  radius: number;
+  attack: FaceAttackState | null;
+  registered: boolean;
+  visible: boolean;
+  lastSeenAt: number;
 };
 
 type PlayerMarker = {
@@ -174,6 +305,9 @@ type PlayerMarker = {
   chargingHeal: boolean;
   healProgress: number;
   defending: boolean;
+  missing: boolean;
+  fireballChargeLevel: number;
+  fireballChargeProgress: number;
 };
 
 type HandAssignment = {
@@ -1464,21 +1598,6 @@ function isShockwaveCollidingWithTarget(
   );
 }
 
-function getTimerWinner(
-  player1Hp: number,
-  player2Hp: number,
-): BattleWinner | null {
-  if (player1Hp <= 0 && player2Hp > 0) {
-    return "PLAYER 2";
-  }
-
-  if (player2Hp <= 0 && player1Hp > 0) {
-    return "PLAYER 1";
-  }
-
-  return null;
-}
-
 function getFaceAttackState(face: Point[]) {
   const upper = face[13];
   const lower = face[14];
@@ -1562,6 +1681,7 @@ function getMouthCenter(face: Point[]) {
 function getBattlePlayers(
   faces: Point[][],
   attacks: FaceAttackState[],
+  maxPlayers: number,
 ): BattlePlayer[] {
   return faces
     .map((face, index) => {
@@ -1572,7 +1692,7 @@ function getBattlePlayers(
       }
 
       return {
-        id: index === 0 ? "player1" : "player2",
+        id: PLAYER_IDS[index],
         face,
         center: target.center,
         radius: target.radius,
@@ -1581,23 +1701,158 @@ function getBattlePlayers(
     })
     .filter((player): player is BattlePlayer => player !== null)
     .sort((a, b) => b.center.x - a.center.x)
-    .slice(0, 2)
+    .slice(0, maxPlayers)
     .map((player, index) => ({
       ...player,
-      id: index === 0 ? "player1" : "player2",
+      id: PLAYER_IDS[index],
     }));
 }
 
-function getOpponent(player: BattlePlayer, players: BattlePlayer[]) {
-  return players.find((candidate) => candidate.id !== player.id);
+function updateTrackedPlayerSlots(
+  detectedPlayers: BattlePlayer[],
+  previousSlots: Record<PlayerId, TrackedPlayerSlot>,
+  maxPlayers: number,
+  time: number,
+) {
+  const activePlayerIds = getActivePlayerIds(maxPlayers);
+  const nextSlots = createTrackedPlayerSlots();
+  const unmatchedPlayers = [...detectedPlayers];
+
+  activePlayerIds.forEach((playerId) => {
+    const previous = previousSlots[playerId];
+
+    nextSlots[playerId] = {
+      ...previous,
+      visible: false,
+      face: null,
+      attack: null,
+    };
+  });
+
+  activePlayerIds.forEach((playerId) => {
+    const previous = previousSlots[playerId];
+
+    if (!previous.registered || !previous.center || unmatchedPlayers.length === 0) {
+      return;
+    }
+
+    const nearest = unmatchedPlayers
+      .map((player, index) => ({
+        player,
+        index,
+        distance: distance(previous.center as Point, player.center),
+      }))
+      .sort((a, b) => a.distance - b.distance)[0];
+
+    if (!nearest || nearest.distance > FACE_TRACK_MAX_DISTANCE) {
+      return;
+    }
+
+    nextSlots[playerId] = {
+      ...previous,
+      face: nearest.player.face,
+      center: nearest.player.center,
+      radius: nearest.player.radius,
+      attack: nearest.player.attack,
+      registered: true,
+      visible: true,
+      lastSeenAt: time,
+    };
+    unmatchedPlayers.splice(nearest.index, 1);
+  });
+
+  activePlayerIds
+    .filter((playerId) => !nextSlots[playerId].registered)
+    .forEach((playerId) => {
+      const player = unmatchedPlayers.shift();
+
+      if (!player) {
+        return;
+      }
+
+      nextSlots[playerId] = {
+        id: playerId,
+        face: player.face,
+        center: player.center,
+        radius: player.radius,
+        attack: player.attack,
+        registered: true,
+        visible: true,
+        lastSeenAt: time,
+      };
+    });
+
+  PLAYER_IDS.filter((playerId) => !activePlayerIds.includes(playerId)).forEach(
+    (playerId) => {
+      nextSlots[playerId] = {
+        ...nextSlots[playerId],
+        registered: false,
+      };
+    },
+  );
+
+  return nextSlots;
+}
+
+function getVisibleBattlePlayers(
+  slots: Record<PlayerId, TrackedPlayerSlot>,
+): BattlePlayer[] {
+  return PLAYER_IDS.map((playerId) => slots[playerId])
+    .filter(
+      (slot) =>
+        slot.registered &&
+        slot.visible &&
+        slot.face !== null &&
+        slot.center !== null &&
+        slot.attack !== null,
+    )
+    .map((slot) => ({
+      id: slot.id,
+      face: slot.face as Point[],
+      center: slot.center as Point,
+      radius: slot.radius,
+      attack: slot.attack as FaceAttackState,
+    }));
+}
+
+function getOpponent(
+  player: BattlePlayer,
+  players: BattlePlayer[],
+  playerHp?: PlayerHp,
+) {
+  return players
+    .filter(
+      (candidate) =>
+        candidate.id !== player.id &&
+        (!playerHp || playerHp[candidate.id] > 0),
+    )
+    .sort(
+      (a, b) =>
+        distance(player.center, a.center) - distance(player.center, b.center),
+    )[0];
+}
+
+function getOpponents(
+  playerId: PlayerId,
+  players: BattlePlayer[],
+  playerHp?: PlayerHp,
+) {
+  return players.filter(
+    (candidate) =>
+      candidate.id !== playerId && (!playerHp || playerHp[candidate.id] > 0),
+  );
+}
+
+function getAttackPairKey(owner: PlayerId, target: PlayerId) {
+  return `${owner}:${target}`;
 }
 
 function getPlayerLabel(id: PlayerId) {
-  return id === "player1" ? "P1" : "P2";
+  return `P${PLAYER_IDS.indexOf(id) + 1}`;
 }
 
 function getPlayerColor(id: PlayerId) {
-  return id === "player1" ? "#53d4ff" : "#ff6b6b";
+  return PLAYER_COLORS[id];
 }
 
 function getHandAnchor(hand: Point[]) {
@@ -1707,6 +1962,10 @@ function getDefenseStates(assignments: HandAssignment[]): DefenseState[] {
         return null;
       }
 
+      if (assignment.hands.some(isPeaceHand)) {
+        return null;
+      }
+
       const defendingHands = assignment.hands.filter(isOpenPalmFacingCamera);
 
       if (defendingHands.length === 0) {
@@ -1789,15 +2048,13 @@ function App() {
     Partial<Record<PlayerId, VoiceAttackTarget>>
   >({});
 
-  const voiceMouthRatiosRef = useRef<Record<PlayerId, number>>({
-    player1: 0,
-    player2: 0,
-  });
+  const voiceMouthRatiosRef = useRef<Record<PlayerId, number>>(
+    createPlayerNumberRecord(0),
+  );
 
-  const voiceMouthActivityRef = useRef<Record<PlayerId, number>>({
-    player1: 0,
-    player2: 0,
-  });
+  const voiceMouthActivityRef = useRef<Record<PlayerId, number>>(
+    createPlayerNumberRecord(0),
+  );
 
   const speakingVoiceTargetRef = useRef<VoiceAttackTarget | null>(null);
 
@@ -1825,50 +2082,47 @@ function App() {
 
   const lightningEffectsRef = useRef<LightningEffect[]>([]);
 
+  const trackedPlayerSlotsRef = useRef<Record<PlayerId, TrackedPlayerSlot>>(
+    createTrackedPlayerSlots(),
+  );
+
+  const lastMissingDamageRef = useRef<Record<PlayerId, number>>(
+    createPlayerNumberRecord(0),
+  );
+
   const attackRecordsRef = useRef<AttackRecord[]>([]);
 
   const nextAttackIdRef = useRef(1);
 
   const battleStartedRef = useRef(false);
 
-  const lastBeamDamageRef = useRef<Record<PlayerId, number>>({
-    player1: 0,
-    player2: 0,
-  });
+  const lastBeamDamageRef = useRef<Record<string, number>>({});
 
-  const lastShockwaveDamageRef = useRef<Record<PlayerId, number>>({
-    player1: 0,
-    player2: 0,
-  });
+  const lastShockwaveDamageRef = useRef<Record<string, number>>({});
 
   const damageFlashUntilRef = useRef<Record<PlayerId, number>>({
-    player1: 0,
-    player2: 0,
+    ...createPlayerNumberRecord(0),
   });
 
   const thunderChargeStartedRef = useRef<Record<PlayerId, number | null>>({
-    player1: null,
-    player2: null,
+    ...createPlayerNullableNumberRecord(null),
   });
 
   const thunderCooldownUntilRef = useRef<Record<PlayerId, number>>({
-    player1: 0,
-    player2: 0,
+    ...createPlayerNumberRecord(0),
   });
 
   const healChargeStartedRef = useRef<Record<PlayerId, number | null>>({
-    player1: null,
-    player2: null,
+    ...createPlayerNullableNumberRecord(null),
   });
 
   const healCooldownUntilRef = useRef<Record<PlayerId, number>>({
-    player1: 0,
-    player2: 0,
+    ...createPlayerNumberRecord(0),
   });
 
-  const [playerHP, setPlayerHP] = useState(MAX_HP);
+  const [playerHp, setPlayerHp] = useState<PlayerHp>(() => createPlayerHp());
 
-  const [player2HP, setPlayer2HP] = useState(MAX_HP);
+  const playerHpRef = useRef<PlayerHp>(createPlayerHp());
 
   const [battleWinner, setBattleWinner] = useState<BattleWinner | null>(null);
 
@@ -1886,12 +2140,7 @@ function App() {
 
   const [voiceTranscripts, setVoiceTranscripts] = useState<
     Record<PlayerId, string>
-  >({
-    player1: "",
-    player2: "",
-  });
-
-  const [modelReady, setModelReady] = useState(false);
+  >(() => createPlayerStringRecord(""));
 
   const [hands, setHands] = useState(0);
 
@@ -1900,8 +2149,6 @@ function App() {
   const [faceCount, setFaceCount] = useState(0);
 
   const [playerMarkers, setPlayerMarkers] = useState<PlayerMarker[]>([]);
-
-  const [mouthOpen, setMouthOpen] = useState(false);
 
   const [leftEyeOpen, setLeftEyeOpen] = useState(false);
 
@@ -1923,12 +2170,23 @@ function App() {
 
   const [status, setStatus] = useState("カメラを起動してください");
 
+  const updatePlayerHp = (updater: (current: PlayerHp) => PlayerHp) => {
+    setPlayerHp((current) => {
+      const next = updater(current);
+
+      playerHpRef.current = next;
+
+      return next;
+    });
+  };
+
   const applySettings = (nextSettings: BattleSettings) => {
     setMaxPlayers(nextSettings.maxPlayers);
     setMaxHands(nextSettings.maxHands);
     setShowJointGuides(nextSettings.showJointGuides);
 
     saveBattleSettings(nextSettings);
+    resetBattleState();
 
     if (cameraStarted) {
       initializeModels(nextSettings.maxPlayers, nextSettings.maxHands);
@@ -1936,22 +2194,15 @@ function App() {
   };
 
   const resetBattleState = () => {
-    setPlayerHP(MAX_HP);
-    setPlayer2HP(MAX_HP);
+    const initialHp = createPlayerHp();
+
+    playerHpRef.current = initialHp;
+    setPlayerHp(initialHp);
     setBattleWinner(null);
     battleStartedRef.current = false;
-    lastBeamDamageRef.current = {
-      player1: 0,
-      player2: 0,
-    };
-    lastShockwaveDamageRef.current = {
-      player1: 0,
-      player2: 0,
-    };
-    damageFlashUntilRef.current = {
-      player1: 0,
-      player2: 0,
-    };
+    lastBeamDamageRef.current = {};
+    lastShockwaveDamageRef.current = {};
+    damageFlashUntilRef.current = createPlayerNumberRecord(0);
     attackRecordsRef.current = [];
     nextAttackIdRef.current = 1;
     lastVoiceAttackTextRef.current = "";
@@ -1960,14 +2211,8 @@ function App() {
     speakingVoiceTargetRef.current = null;
     voiceLastSoundAtRef.current = 0;
     recentVoiceAttackTextsRef.current = [];
-    voiceMouthRatiosRef.current = {
-      player1: 0,
-      player2: 0,
-    };
-    voiceMouthActivityRef.current = {
-      player1: 0,
-      player2: 0,
-    };
+    voiceMouthRatiosRef.current = createPlayerNumberRecord(0);
+    voiceMouthActivityRef.current = createPlayerNumberRecord(0);
     fireballsRef.current = [];
     voiceTextAttacksRef.current = [];
     hitEffectsRef.current = [];
@@ -1975,26 +2220,13 @@ function App() {
     defenseEffectsRef.current = [];
     defenseStatesRef.current = [];
     lightningEffectsRef.current = [];
-    thunderChargeStartedRef.current = {
-      player1: null,
-      player2: null,
-    };
-    thunderCooldownUntilRef.current = {
-      player1: 0,
-      player2: 0,
-    };
-    healChargeStartedRef.current = {
-      player1: null,
-      player2: null,
-    };
-    healCooldownUntilRef.current = {
-      player1: 0,
-      player2: 0,
-    };
-    setVoiceTranscripts({
-      player1: "",
-      player2: "",
-    });
+    trackedPlayerSlotsRef.current = createTrackedPlayerSlots();
+    lastMissingDamageRef.current = createPlayerNumberRecord(0);
+    thunderChargeStartedRef.current = createPlayerNullableNumberRecord(null);
+    thunderCooldownUntilRef.current = createPlayerNumberRecord(0);
+    healChargeStartedRef.current = createPlayerNullableNumberRecord(null);
+    healCooldownUntilRef.current = createPlayerNumberRecord(0);
+    setVoiceTranscripts(createPlayerStringRecord(""));
     setPlayerMarkers([]);
   };
 
@@ -2122,7 +2354,7 @@ function App() {
   };
 
   const chooseVoiceTargetFromMouthActivity = () => {
-    const candidates = (["player1", "player2"] as PlayerId[])
+    const candidates = getActivePlayerIds(maxPlayers)
       .map((playerId) => {
         const target = latestVoiceTargetsRef.current[playerId];
 
@@ -2149,8 +2381,9 @@ function App() {
   const getCurrentVoiceTarget = (): VoiceAttackTarget | null =>
     speakingVoiceTargetRef.current ??
     chooseVoiceTargetFromMouthActivity() ??
-    latestVoiceTargetsRef.current.player1 ??
-    latestVoiceTargetsRef.current.player2 ??
+    getActivePlayerIds(maxPlayers)
+      .map((playerId) => latestVoiceTargetsRef.current[playerId])
+      .find((target): target is VoiceAttackTarget => target !== undefined) ??
     null;
 
   const lockVoiceTargetIfNeeded = () => {
@@ -2416,8 +2649,6 @@ function App() {
     handLimit = maxHands,
   ) => {
     try {
-      setModelReady(false);
-
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
         animationRef.current = null;
@@ -2513,8 +2744,6 @@ function App() {
 
       faceLandmarkerRef.current = faceLandmarker;
 
-      setModelReady(true);
-
       setStatus("SYSTEM READY");
 
       startDetection();
@@ -2609,14 +2838,18 @@ function App() {
     owner: PlayerId,
     target: PlayerId | null,
     time: number,
+    reuseWindow = 700,
   ) => {
-    const recent = attackRecordsRef.current.findLast(
-      (attack) =>
-        attack.type === type &&
-        attack.owner === owner &&
-        attack.target === target &&
-        time - attack.startedAt < 700,
-    );
+    const recent =
+      reuseWindow > 0
+        ? attackRecordsRef.current.findLast(
+            (attack) =>
+              attack.type === type &&
+              attack.owner === owner &&
+              attack.target === target &&
+              time - attack.startedAt < reuseWindow,
+          )
+        : null;
 
     if (recent) {
       return recent;
@@ -2678,7 +2911,7 @@ function App() {
     }
 
     const levelRatio = Math.min(1, Math.max(0.18, micLevelRef.current / 100));
-    const attack = recordAttack("voice", target.owner, target.target, now);
+    const attack = recordAttack("voice", target.owner, target.target, now, 0);
     const fontSize = Math.round(58 + levelRatio * 96);
     const letters = Array.from(trimmedText.replace(/\s+/g, "")).slice(0, 14);
     const direction = getNormalizedDirection(target.start, target.targetCenter);
@@ -2746,7 +2979,7 @@ function App() {
     defender: BattlePlayer,
     time: number,
   ) => {
-    const attack = recordAttack("thunder", attacker.id, defender.id, time);
+    const attack = recordAttack("thunder", attacker.id, defender.id, time, 0);
 
     markAttackHit(attack.id, time);
 
@@ -2769,17 +3002,16 @@ function App() {
       return;
     }
 
-    if (player.id === "player1") {
-      setPlayerHP((current) => Math.min(MAX_HP, current + amount));
-    } else {
-      setPlayer2HP((current) => Math.min(MAX_HP, current + amount));
-    }
+    updatePlayerHp((current) => ({
+      ...current,
+      [player.id]: Math.min(MAX_HP, current[player.id] + amount),
+    }));
 
     spawnHealEffect(player, amount);
   };
 
   const triggerHeal = (player: BattlePlayer, time: number) => {
-    const attack = recordAttack("heal", player.id, player.id, time);
+    const attack = recordAttack("heal", player.id, player.id, time, 0);
 
     markAttackHit(attack.id, time);
 
@@ -2811,44 +3043,21 @@ function App() {
       spawnDefenseEffect(target, hitX, hitY);
     }
 
-    if (target === "player2") {
-      setPlayer2HP((current) => {
-        const next = Math.max(0, current - finalAmount);
+    updatePlayerHp((current) => {
+      if (current[target] <= 0) {
+        return current;
+      }
 
-        if (!defending && hitX !== undefined && hitY !== undefined) {
-          spawnHitEffect(
-            hitX,
-            hitY,
-            hitColor ?? "#ff6b6b",
-            finalAmount,
-            target,
-          );
-        }
-
-        if (!defending) {
-          damageFlashUntilRef.current[target] =
-            performance.now() + DAMAGE_FLASH_TIME;
-        }
-
-        const winner = getTimerWinner(playerHP, next);
-
-        if (winner) {
-          setBattleWinner(winner);
-        }
-
-        return next;
-      });
-      return;
-    }
-
-    setPlayerHP((current) => {
-      const next = Math.max(0, current - finalAmount);
+      const nextHp = {
+        ...current,
+        [target]: Math.max(0, current[target] - finalAmount),
+      };
 
       if (!defending && hitX !== undefined && hitY !== undefined) {
         spawnHitEffect(
           hitX,
           hitY,
-          hitColor ?? "#53d4ff",
+          hitColor ?? getPlayerColor(target),
           finalAmount,
           target,
         );
@@ -2859,13 +3068,42 @@ function App() {
           performance.now() + DAMAGE_FLASH_TIME;
       }
 
-      const winner = getTimerWinner(next, player2HP);
+      const winner = getBattleWinner(nextHp, getActivePlayerIds(maxPlayers));
 
       if (winner) {
         setBattleWinner(winner);
       }
 
-      return next;
+      return nextHp;
+    });
+  };
+
+  const applyMissingFaceDamage = (
+    slots: Record<PlayerId, TrackedPlayerSlot>,
+    time: number,
+  ) => {
+    getActivePlayerIds(maxPlayers).forEach((playerId) => {
+      const slot = slots[playerId];
+
+      if (
+        !slot.registered ||
+        slot.visible ||
+        playerHpRef.current[playerId] <= 0 ||
+        time - lastMissingDamageRef.current[playerId] <
+          FACE_MISSING_DAMAGE_INTERVAL
+      ) {
+        return;
+      }
+
+      lastMissingDamageRef.current[playerId] = time;
+
+      applyBattleDamage(
+        playerId,
+        FACE_MISSING_DAMAGE,
+        slot.center?.x,
+        slot.center?.y,
+        getPlayerColor(playerId),
+      );
     });
   };
 
@@ -3060,26 +3298,25 @@ function App() {
         return;
       }
 
-      const defender = battlePlayers.find(
-        (player) => player.id !== fireball.owner,
+      const fireballCenter = {
+        x: fireball.x,
+        y: fireball.y,
+        z: 0,
+      };
+      const defender = getOpponents(
+        fireball.owner,
+        battlePlayers,
+        playerHpRef.current,
+      ).find((candidate) =>
+        isCircleCollidingWithTarget(
+          fireballCenter,
+          fireball.radius,
+          candidate.center,
+          candidate.radius,
+        ),
       );
 
       if (!defender) {
-        return;
-      }
-
-      const hit = isCircleCollidingWithTarget(
-        {
-          x: fireball.x,
-          y: fireball.y,
-          z: 0,
-        },
-        fireball.radius,
-        defender.center,
-        defender.radius,
-      );
-
-      if (!hit) {
         return;
       }
 
@@ -3091,7 +3328,7 @@ function App() {
 
       applyBattleDamage(
         defender.id,
-        FIREBALL_DAMAGE,
+        fireball.damage,
         defender.center.x,
         defender.center.y,
         getPlayerColor(defender.id),
@@ -3104,18 +3341,24 @@ function App() {
       );
     }
 
+    const fireballChargeByPlayer = createPlayerNumberRecord(0);
+
     trackedHands.forEach((hand, handIndex) => {
       const owner = trackedHandEntries[handIndex]?.owner ?? null;
 
       const center = getFistCenter(hand);
+      const peaceHand = isPeaceHand(hand);
 
-      const isPunchReady = isFist(hand) && fistsAreSeparated && center;
+      const isPunchReady =
+        !peaceHand && isFist(hand) && fistsAreSeparated && center;
 
       if (!punchStates[handIndex]) {
         punchStates[handIndex] = {
           previousCenter: null,
           previousSize: 0,
           previousTime: time,
+          chargeAnchor: null,
+          punchReadyUntil: 0,
           trajectory: [],
           charge: 0,
           cooldown: 0,
@@ -3133,8 +3376,10 @@ function App() {
         state.previousCenter = center;
         state.previousSize = handSize;
         state.previousTime = time;
+        state.chargeAnchor = null;
+        state.punchReadyUntil = 0;
         state.trajectory = center ? [center] : [];
-        state.charge = fistsAreSeparated ? state.charge : 0;
+        state.charge = 0;
         state.ready = false;
         return;
       }
@@ -3163,6 +3408,23 @@ function App() {
         MIN_PUNCH_MOVE_DISTANCE,
         handSize * MIN_PUNCH_MOVE_SCALE,
       );
+      const stillMoveBuffer = Math.max(PUNCH_STILL_MOVE_BUFFER, handSize * 0.1);
+      const isStill = movementDistance <= stillMoveBuffer;
+
+      if (isStill) {
+        state.charge = Math.min(MAX_PUNCH_CHARGE, state.charge + deltaTime);
+        state.chargeAnchor = state.chargeAnchor
+          ? {
+              x: state.chargeAnchor.x * 0.88 + center.x * 0.12,
+              y: state.chargeAnchor.y * 0.88 + center.y * 0.12,
+              z: state.chargeAnchor.z * 0.88 + center.z * 0.12,
+            }
+          : center;
+
+        if (state.charge >= MIN_PUNCH_CHARGE) {
+          state.punchReadyUntil = time + PUNCH_READY_BUFFER_TIME;
+        }
+      }
 
       const lastTrajectoryPoint = state.trajectory[state.trajectory.length - 1];
 
@@ -3179,33 +3441,30 @@ function App() {
         state.trajectory,
       );
 
-      const growthSpeed =
-        state.previousSize > 0
-          ? (handSize - state.previousSize) / deltaTime
-          : 0;
+      const punchAnchor = state.chargeAnchor ?? state.previousCenter ?? center;
+      const releaseDistance = distance(punchAnchor, center);
+      const punchWindowActive =
+        state.charge >= MIN_PUNCH_CHARGE || time <= state.punchReadyUntil;
 
-      state.charge = Math.min(MAX_PUNCH_CHARGE, state.charge + deltaTime);
-
-      state.ready = true;
+      state.ready = punchWindowActive && state.cooldown === 0;
 
       if (
-        (speed > 0.00065 || growthSpeed > 0.00018) &&
-        movementDistance > minPunchMoveDistance &&
+        !isStill &&
+        punchWindowActive &&
+        speed > 0.00055 &&
+        releaseDistance > minPunchMoveDistance &&
         trajectoryStraightness > MIN_PUNCH_STRAIGHTNESS &&
-        state.charge > MIN_PUNCH_CHARGE &&
         state.cooldown === 0
       ) {
-        const direction = getNormalizedDirection(
-          state.previousCenter ?? center,
-          center,
-        );
+        const direction = getNormalizedDirection(punchAnchor, center);
 
-        const chargeRatio = Math.min(1, state.charge / MAX_PUNCH_CHARGE);
+        const chargeLevel = getFireballChargeLevel(state.charge);
+        const fireballStats = getFireballLevelStats(state.charge);
 
-        const fireballSpeed = Math.min(0.0024, Math.max(0.0009, speed * 0.55));
+        const fireballSpeed = Math.min(0.0026, Math.max(0.001, speed * 0.72));
 
         const attack = owner
-          ? recordAttack("fireball", owner, null, time)
+          ? recordAttack("fireball", owner, null, time, 0)
           : null;
 
         fireballsRef.current = [
@@ -3215,7 +3474,9 @@ function App() {
             y: center.y,
             vx: direction.x * fireballSpeed,
             vy: direction.y * fireballSpeed,
-            radius: 0.035 + chargeRatio * 0.075,
+            radius: fireballStats.radius,
+            damage: fireballStats.damage,
+            chargeLevel,
             life: 1700,
             maxLife: 1700,
             owner,
@@ -3225,13 +3486,28 @@ function App() {
 
         state.charge = 0;
         state.cooldown = PUNCH_COOLDOWN;
+        state.chargeAnchor = null;
+        state.punchReadyUntil = 0;
         state.trajectory = [center];
+      } else if (!isStill && time > state.punchReadyUntil) {
+        state.charge = 0;
+        state.chargeAnchor = center;
+        state.trajectory = [center];
+      }
+
+      if (owner && state.cooldown === 0 && state.charge > 0) {
+        fireballChargeByPlayer[owner] = Math.max(
+          fireballChargeByPlayer[owner],
+          state.charge,
+        );
       }
 
       state.previousCenter = center;
       state.previousSize = handSize;
       state.previousTime = time;
     });
+
+    return fireballChargeByPlayer;
   };
 
   const detect = () => {
@@ -3282,15 +3558,39 @@ function App() {
 
       const faceAttackStates = faceResult.faceLandmarks.map(getFaceAttackState);
 
-      const battlePlayers = getBattlePlayers(
+      const detectedBattlePlayers = getBattlePlayers(
         faceResult.faceLandmarks,
         faceAttackStates,
+        maxPlayers,
       );
+      const trackedPlayerSlots = updateTrackedPlayerSlots(
+        detectedBattlePlayers,
+        trackedPlayerSlotsRef.current,
+        maxPlayers,
+        now,
+      );
+      const battlePlayers = getVisibleBattlePlayers(trackedPlayerSlots);
+
+      trackedPlayerSlotsRef.current = trackedPlayerSlots;
+
+      const activeBattlePlayers = battlePlayers.filter(
+        (player) => playerHpRef.current[player.id] > 0,
+      );
+
+      applyMissingFaceDamage(trackedPlayerSlots, now);
 
       const voiceTargets = battlePlayers.reduce<
         Partial<Record<PlayerId, VoiceAttackTarget>>
       >((targets, player) => {
-        const defender = getOpponent(player, battlePlayers);
+        if (playerHpRef.current[player.id] <= 0) {
+          return targets;
+        }
+
+        const defender = getOpponent(
+          player,
+          activeBattlePlayers,
+          playerHpRef.current,
+        );
         const start = getMouthCenter(player.face);
 
         if (!defender || !start) {
@@ -3309,10 +3609,10 @@ function App() {
         return targets;
       }, {});
       const voiceAttacker =
-        battlePlayers
+        activeBattlePlayers
           .filter((player) => player.attack.mouthOpen)
           .sort((a, b) => b.attack.mouthRatio - a.attack.mouthRatio)[0] ??
-        battlePlayers[0];
+        activeBattlePlayers[0];
 
       latestVoiceTargetsRef.current = voiceTargets;
       battlePlayers.forEach((player) => {
@@ -3335,16 +3635,20 @@ function App() {
 
       const handAssignments = assignHandsToPlayers(
         handResult.landmarks,
-        battlePlayers,
+        activeBattlePlayers,
       );
 
       const defenseStates = getDefenseStates(handAssignments);
 
       defenseStatesRef.current = defenseStates;
 
-      updatePunchFireballs(now, handAssignments, battlePlayers);
+      const fireballChargeByPlayer = updatePunchFireballs(
+        now,
+        handAssignments,
+        activeBattlePlayers,
+      );
 
-      updateVoiceTextAttacks(now, battlePlayers, frameDelta);
+      updateVoiceTextAttacks(now, activeBattlePlayers, frameDelta);
 
       const thunderChargingPlayers = new Set<PlayerId>();
       const healChargingPlayers = new Set<PlayerId>();
@@ -3389,7 +3693,11 @@ function App() {
           thunderChargeStartedRef.current[assignment.player.id] = now;
         }
 
-        const defender = getOpponent(assignment.player, battlePlayers);
+        const defender = getOpponent(
+          assignment.player,
+          activeBattlePlayers,
+          playerHpRef.current,
+        );
 
         if (!defender) {
           return;
@@ -3407,51 +3715,74 @@ function App() {
         }
       });
 
+      const shockwaveAssignments = handAssignments.filter(
+        (assignment) => !thunderChargingPlayers.has(assignment.player.id),
+      );
+
       const activePlayer = battlePlayers.find(
-        (player) => player.attack.beamActive,
+        (player) =>
+          playerHpRef.current[player.id] > 0 && player.attack.beamActive,
       );
 
       const displayFaceState = activePlayer?.attack ?? faceAttackStates[0];
 
       setPlayerMarkers(
-        battlePlayers.map((player) => {
-          const thunderStarted = thunderChargeStartedRef.current[player.id];
-          const healStarted = healChargeStartedRef.current[player.id];
+        getActivePlayerIds(maxPlayers)
+          .map((playerId) => trackedPlayerSlots[playerId])
+          .filter(
+            (slot) =>
+              slot.registered && slot.center !== null && playerHpRef.current[slot.id] > 0,
+          )
+          .map((slot) => {
+            const player = battlePlayers.find(
+              (candidate) => candidate.id === slot.id,
+            );
+            const thunderStarted = thunderChargeStartedRef.current[slot.id];
+            const healStarted = healChargeStartedRef.current[slot.id];
+            const alive = playerHpRef.current[slot.id] > 0;
 
           return {
             handCount:
               handAssignments.find(
-                (assignment) => assignment.player.id === player.id,
+                (assignment) => assignment.player.id === slot.id,
               )?.hands.length ?? 0,
-            id: player.id,
-            x: 1 - player.center.x,
-            y: Math.max(0.08, player.center.y - player.radius),
-            damaged: now < damageFlashUntilRef.current[player.id],
+            id: slot.id,
+            x: 1 - (slot.center as Point).x,
+            y: Math.max(0.08, (slot.center as Point).y - slot.radius),
+            damaged: now < damageFlashUntilRef.current[slot.id],
             attacking:
-              player.attack.beamActive ||
-              thunderChargingPlayers.has(player.id) ||
-              healChargingPlayers.has(player.id),
+              alive &&
+              ((player?.attack.beamActive ?? false) ||
+                thunderChargingPlayers.has(slot.id) ||
+                healChargingPlayers.has(slot.id)),
             defending: defenseStates.some(
-              (state) => state.playerId === player.id,
+              (state) => state.playerId === slot.id,
             ),
-            chargingThunder: thunderChargingPlayers.has(player.id),
+            chargingThunder: thunderChargingPlayers.has(slot.id),
             thunderProgress:
               thunderStarted === null
                 ? 0
                 : Math.min(1, (now - thunderStarted) / THUNDER_CHARGE_TIME),
-            chargingHeal: healChargingPlayers.has(player.id),
+            chargingHeal: healChargingPlayers.has(slot.id),
             healProgress:
               healStarted === null
                 ? 0
                 : Math.min(1, (now - healStarted) / HEAL_CHARGE_TIME),
+            missing: !slot.visible,
+            fireballChargeLevel:
+              fireballChargeByPlayer[slot.id] >= MIN_PUNCH_CHARGE
+                ? getFireballChargeLevel(fireballChargeByPlayer[slot.id])
+                : 0,
+            fireballChargeProgress: getFireballChargeProgress(
+              fireballChargeByPlayer[slot.id],
+            ),
           };
-        }),
+          }),
       );
 
       setMouthRatio(displayFaceState?.mouthRatio ?? 0);
       setLeftEyeRatio(displayFaceState?.leftEyeRatio ?? 0);
       setRightEyeRatio(displayFaceState?.rightEyeRatio ?? 0);
-      setMouthOpen(displayFaceState?.mouthOpen ?? false);
       setLeftEyeOpen(displayFaceState?.leftEyeOpen ?? false);
       setRightEyeOpen(displayFaceState?.rightEyeOpen ?? false);
 
@@ -3483,58 +3814,63 @@ function App() {
         }))
         .filter((effect) => effect.life > 0);
 
-      handAssignments.forEach((assignment) => {
+      shockwaveAssignments.forEach((assignment) => {
         const shockwave = getHandShockwaveData(assignment.hands);
 
         if (!shockwave) {
           return;
         }
 
-        const defender = getOpponent(assignment.player, battlePlayers);
-
-        if (!defender) {
-          return;
-        }
-
-        const attack = recordAttack(
-          "shockwave",
+        getOpponents(
           assignment.player.id,
-          defender.id,
-          now,
-        );
-
-        const hit = isShockwaveCollidingWithTarget(
-          shockwave.center,
-          shockwave.direction,
-          shockwave.strength,
-          defender.center,
-          defender.radius,
-        );
-
-        if (
-          hit &&
-          now - lastShockwaveDamageRef.current[defender.id] >=
-            SHOCKWAVE_DAMAGE_COOLDOWN
-        ) {
-          lastShockwaveDamageRef.current[defender.id] = now;
-          markAttackHit(attack.id, now);
-
-          applyBattleDamage(
+          activeBattlePlayers,
+          playerHpRef.current,
+        ).forEach((defender) => {
+          const attack = recordAttack(
+            "shockwave",
+            assignment.player.id,
             defender.id,
-            SHOCKWAVE_DAMAGE,
-            defender.center.x,
-            defender.center.y,
-            getPlayerColor(defender.id),
+            now,
           );
-        }
+
+          const hit = isShockwaveCollidingWithTarget(
+            shockwave.center,
+            shockwave.direction,
+            shockwave.strength,
+            defender.center,
+            defender.radius,
+          );
+          const damageKey = getAttackPairKey(assignment.player.id, defender.id);
+
+          if (
+            hit &&
+            now - (lastShockwaveDamageRef.current[damageKey] ?? 0) >=
+              SHOCKWAVE_DAMAGE_COOLDOWN
+          ) {
+            lastShockwaveDamageRef.current[damageKey] = now;
+            markAttackHit(attack.id, now);
+
+            applyBattleDamage(
+              defender.id,
+              SHOCKWAVE_DAMAGE,
+              defender.center.x,
+              defender.center.y,
+              getPlayerColor(defender.id),
+            );
+          }
+        });
       });
 
-      battlePlayers.forEach((attacker) => {
+      activeBattlePlayers.forEach((attacker) => {
         if (!attacker.attack.beamActive) {
           return;
         }
 
-        const defender = getOpponent(attacker, battlePlayers);
+        const defender = getOpponent(
+          attacker,
+          activeBattlePlayers,
+          playerHpRef.current,
+        );
 
         if (!defender) {
           return;
@@ -3554,12 +3890,14 @@ function App() {
             defender.center,
             defender.radius,
           );
+          const damageKey = getAttackPairKey(attacker.id, defender.id);
 
           if (
             hit &&
-            now - lastBeamDamageRef.current[defender.id] >= BEAM_DAMAGE_COOLDOWN
+            now - (lastBeamDamageRef.current[damageKey] ?? 0) >=
+              BEAM_DAMAGE_COOLDOWN
           ) {
-            lastBeamDamageRef.current[defender.id] = now;
+            lastBeamDamageRef.current[damageKey] = now;
             markAttackHit(attack.id, now);
 
             applyBattleDamage(
@@ -3581,6 +3919,7 @@ function App() {
         handAssignments,
         battlePlayers,
         defenseStates,
+        thunderChargingPlayers,
         fireballsRef.current,
         now,
         showJointGuides,
@@ -3602,6 +3941,7 @@ function App() {
     handAssignments: HandAssignment[],
     battlePlayers: BattlePlayer[],
     defenseStates: DefenseState[],
+    thunderChargingPlayers: Set<PlayerId>,
     fireballs: Fireball[],
     time: number,
     showGuides: boolean,
@@ -3688,9 +4028,11 @@ function App() {
     // 手・指
     // ----------------------------
 
-    handAssignments.forEach((assignment) =>
-      drawHandShockwave(ctx, canvas, assignment.hands, time),
-    );
+    handAssignments
+      .filter((assignment) => !thunderChargingPlayers.has(assignment.player.id))
+      .forEach((assignment) =>
+        drawHandShockwave(ctx, canvas, assignment.hands, time),
+      );
 
     drawFireballs(ctx, canvas, fireballs, time);
 
@@ -3877,7 +4219,9 @@ function App() {
             <div className="battle-result-screen">
               <div className="battle-result-card">
                 <div className="battle-result-title">決着</div>
-                <div className="battle-result-winner">{battleWinner} WIN</div>
+                <div className="battle-result-winner">
+                  {getPlayerLabel(battleWinner)} WIN
+                </div>
                 <div className="battle-result-sub">HPが残っている方の勝ち</div>
                 <button
                   type="button"
@@ -3898,14 +4242,15 @@ function App() {
           <p className="subtitle">ULTIMATE ATTACK SYSTEM</p>
 
           <div className="status-row">
-            <div className="tiny-panel">
-              <span>PLAYER 1 HP</span>
-              <strong>{playerHP}</strong>
-            </div>
-            <div className="tiny-panel player2-panel">
-              <span>PLAYER 2 HP</span>
-              <strong>{player2HP}</strong>
-            </div>
+            {getActivePlayerIds(maxPlayers).map((playerId) => (
+              <div
+                key={playerId}
+                className={`tiny-panel ${playerId}-panel`}
+              >
+                <span>{getPlayerLabel(playerId)} HP</span>
+                <strong>{playerHp[playerId]}</strong>
+              </div>
+            ))}
           </div>
 
           <div className="camera">
@@ -3934,6 +4279,7 @@ function App() {
                   marker.damaged ? "damaged" : "",
                   marker.attacking ? "attacking" : "",
                   marker.defending ? "defending" : "",
+                  marker.missing ? "missing" : "",
                 ].join(" ")}
                 style={{
                   left: `${marker.x * 100}%`,
@@ -3944,12 +4290,38 @@ function App() {
                 <small>
                   {marker.defending
                     ? "GUARD"
+                    : marker.missing
+                      ? "MISSING"
                     : marker.chargingHeal
                       ? "HEAL"
                       : marker.chargingThunder
                         ? "THUNDER"
                       : `${marker.handCount} HANDS`}
                 </small>
+                {marker.fireballChargeProgress > 0 && !marker.missing && (
+                  <div
+                    className={[
+                      "fireball-charge",
+                      marker.fireballChargeLevel > 0 ? "ready" : "",
+                    ].join(" ")}
+                  >
+                    <strong>
+                      {marker.fireballChargeLevel > 0
+                        ? `FIRE Lv${marker.fireballChargeLevel}`
+                        : "FIRE"}
+                    </strong>
+                    <div aria-hidden="true">
+                      {FIREBALL_LEVELS.map((_, index) => (
+                        <b
+                          key={index}
+                          className={
+                            index < marker.fireballChargeLevel ? "filled" : ""
+                          }
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {(marker.chargingThunder || marker.chargingHeal) && (
                   <div
                     className={
@@ -3969,12 +4341,6 @@ function App() {
                 )}
               </div>
             ))}
-
-            {modelReady && (
-              <div className={`mouth-status ${mouthOpen ? "open" : "closed"}`}>
-                {mouthOpen ? "OPEN" : "CLOSED"}
-              </div>
-            )}
           </div>
 
           <div className="info">
@@ -4002,12 +4368,6 @@ function App() {
               </strong>
             </div>
 
-            <div>
-              <span>MOUTH</span>
-
-              <strong>{mouthOpen ? "OPEN" : "CLOSED"}</strong>
-            </div>
-
             <div className={micStarted ? "mic-panel active" : "mic-panel"}>
               <span>MIC</span>
 
@@ -4032,15 +4392,15 @@ function App() {
           </div>
 
           <div className="voice-transcripts">
-            <div className="voice-transcript player1-voice">
-              <span>P1 VOICE</span>
-              <strong>{voiceTranscripts.player1 || "..."}</strong>
-            </div>
-
-            <div className="voice-transcript player2-voice">
-              <span>P2 VOICE</span>
-              <strong>{voiceTranscripts.player2 || "..."}</strong>
-            </div>
+            {getActivePlayerIds(maxPlayers).map((playerId) => (
+              <div
+                key={playerId}
+                className={`voice-transcript ${playerId}-voice`}
+              >
+                <span>{getPlayerLabel(playerId)} VOICE</span>
+                <strong>{voiceTranscripts[playerId] || "..."}</strong>
+              </div>
+            ))}
 
             <div className="speech-control">
               <small>{speechStatus}</small>
