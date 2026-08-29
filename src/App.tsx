@@ -179,6 +179,14 @@ const PLAYER_COLORS: Record<PlayerId, string> = {
   player4: "#ffcc66",
 };
 
+const WAZA_LABELS: Record<DamageAttackType, string> = {
+  beam: "レーザー",
+  fireball: "火球",
+  shockwave: "衝撃波",
+  thunder: "雷撃",
+  voice: "VOICE",
+};
+
 function getActivePlayerIds(maxPlayers: number) {
   return PLAYER_IDS.slice(0, maxPlayers);
 }
@@ -248,11 +256,24 @@ function getBattleWinner(
   playerHp: PlayerHp,
   activePlayerIds: PlayerId[],
 ): BattleWinner | null {
+  if (activePlayerIds.length < 2) {
+    return null;
+  }
+
   const alivePlayers = activePlayerIds.filter(
     (playerId) => playerHp[playerId] > 0,
   );
 
   return alivePlayers.length === 1 ? alivePlayers[0] : null;
+}
+
+function getRegisteredPlayerIds(
+  slots: Record<PlayerId, TrackedPlayerSlot>,
+  maxPlayers: number,
+) {
+  return getActivePlayerIds(maxPlayers).filter(
+    (playerId) => slots[playerId].registered,
+  );
 }
 
 function getFireballChargeLevel(chargeTime: number) {
@@ -270,6 +291,12 @@ function getFireballLevelStats(chargeTime: number) {
 
 function getFireballChargeProgress(chargeTime: number) {
   return Math.min(1, Math.max(0, chargeTime / MAX_PUNCH_CHARGE));
+}
+
+function isDamageAttackType(
+  type: AttackRecord["type"],
+): type is DamageAttackType {
+  return type !== "heal";
 }
 
 type FaceAttackState = ReturnType<typeof getFaceAttackState>;
@@ -328,6 +355,20 @@ type AttackRecord = {
   target: PlayerId | null;
   startedAt: number;
   lastHitAt: number | null;
+  photo: string | null;
+};
+
+type DamageAttackType = Exclude<AttackRecord["type"], "heal">;
+
+type BestWazaEntry = {
+  key: string;
+  type: DamageAttackType;
+  owner: PlayerId;
+  damage: number;
+  attackId: number;
+  attackCount: number;
+  photo: string | null;
+  updatedAt: number;
 };
 
 type VoiceAttackTarget = {
@@ -2094,6 +2135,8 @@ function App() {
 
   const nextAttackIdRef = useRef(1);
 
+  const bestWazaEntriesRef = useRef<Record<string, BestWazaEntry>>({});
+
   const battleStartedRef = useRef(false);
 
   const lastBeamDamageRef = useRef<Record<string, number>>({});
@@ -2125,6 +2168,8 @@ function App() {
   const playerHpRef = useRef<PlayerHp>(createPlayerHp());
 
   const [battleWinner, setBattleWinner] = useState<BattleWinner | null>(null);
+
+  const [bestWaza, setBestWaza] = useState<BestWazaEntry | null>(null);
 
   const [cameraStarted, setCameraStarted] = useState(false);
 
@@ -2205,6 +2250,8 @@ function App() {
     damageFlashUntilRef.current = createPlayerNumberRecord(0);
     attackRecordsRef.current = [];
     nextAttackIdRef.current = 1;
+    bestWazaEntriesRef.current = {};
+    setBestWaza(null);
     lastVoiceAttackTextRef.current = "";
     voiceSessionActiveRef.current = false;
     voiceUtteranceFiredRef.current = false;
@@ -2228,6 +2275,18 @@ function App() {
     healCooldownUntilRef.current = createPlayerNumberRecord(0);
     setVoiceTranscripts(createPlayerStringRecord(""));
     setPlayerMarkers([]);
+  };
+
+  const restartBattleLoop = () => {
+    if (
+      cameraStarted &&
+      !animationRef.current &&
+      handLandmarkerRef.current &&
+      poseLandmarkerRef.current &&
+      faceLandmarkerRef.current
+    ) {
+      startDetection();
+    }
   };
 
   useEffect(() => {
@@ -2574,6 +2633,7 @@ function App() {
   const startCamera = async () => {
     try {
       setStatus("カメラ・マイクを起動中...");
+      resetBattleState();
 
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -2833,6 +2893,76 @@ function App() {
     ].slice(-10);
   };
 
+  const captureCurrentBattleFrame = () => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+
+    if (!video || !canvas || video.videoWidth === 0 || video.videoHeight === 0) {
+      return null;
+    }
+
+    const snapshot = document.createElement("canvas");
+    snapshot.width = 640;
+    snapshot.height = Math.round((video.videoHeight / video.videoWidth) * 640);
+
+    const ctx = snapshot.getContext("2d");
+
+    if (!ctx) {
+      return null;
+    }
+
+    ctx.translate(snapshot.width, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(video, 0, 0, snapshot.width, snapshot.height);
+    ctx.drawImage(canvas, 0, 0, snapshot.width, snapshot.height);
+
+    return snapshot.toDataURL("image/jpeg", 0.82);
+  };
+
+  const getCurrentBestWaza = () =>
+    Object.values(bestWazaEntriesRef.current).sort(
+      (a, b) => b.damage - a.damage || b.updatedAt - a.updatedAt,
+    )[0] ?? null;
+
+  const registerWazaDamage = (
+    attackId: number | undefined,
+    damage: number,
+    time: number,
+  ) => {
+    if (!attackId || damage <= 0) {
+      return;
+    }
+
+    const attack = attackRecordsRef.current.find(
+      (record) => record.id === attackId,
+    );
+
+    if (!attack || !isDamageAttackType(attack.type)) {
+      return;
+    }
+
+    const key = `${attack.owner}:${attack.type}`;
+    const current = bestWazaEntriesRef.current[key];
+    const photo = attack.photo ?? captureCurrentBattleFrame();
+
+    bestWazaEntriesRef.current = {
+      ...bestWazaEntriesRef.current,
+      [key]: {
+        key,
+        type: attack.type,
+        owner: attack.owner,
+        damage: (current?.damage ?? 0) + damage,
+        attackId: attack.id,
+        attackCount:
+          current && current.attackId === attack.id
+            ? current.attackCount
+            : (current?.attackCount ?? 0) + 1,
+        photo: photo ?? current?.photo ?? null,
+        updatedAt: time,
+      },
+    };
+  };
+
   const recordAttack = (
     type: AttackRecord["type"],
     owner: PlayerId,
@@ -2862,6 +2992,7 @@ function App() {
       target,
       startedAt: time,
       lastHitAt: null,
+      photo: captureCurrentBattleFrame(),
     };
 
     nextAttackIdRef.current += 1;
@@ -2991,6 +3122,7 @@ function App() {
       defender.center.x,
       defender.center.y,
       "#f8fbff",
+      attack.id,
     );
 
     thunderCooldownUntilRef.current[attacker.id] = time + THUNDER_COOLDOWN;
@@ -3027,6 +3159,7 @@ function App() {
     hitX?: number,
     hitY?: number,
     hitColor?: string,
+    attackId?: number,
   ) => {
     if (battleWinner) {
       return;
@@ -3043,39 +3176,46 @@ function App() {
       spawnDefenseEffect(target, hitX, hitY);
     }
 
-    updatePlayerHp((current) => {
-      if (current[target] <= 0) {
-        return current;
-      }
+    const current = playerHpRef.current;
 
-      const nextHp = {
-        ...current,
-        [target]: Math.max(0, current[target] - finalAmount),
-      };
+    if (current[target] <= 0) {
+      return;
+    }
 
-      if (!defending && hitX !== undefined && hitY !== undefined) {
-        spawnHitEffect(
-          hitX,
-          hitY,
-          hitColor ?? getPlayerColor(target),
-          finalAmount,
-          target,
-        );
-      }
+    const actualDamage = Math.min(current[target], finalAmount);
+    const nextHp = {
+      ...current,
+      [target]: current[target] - actualDamage,
+    };
 
-      if (!defending) {
-        damageFlashUntilRef.current[target] =
-          performance.now() + DAMAGE_FLASH_TIME;
-      }
+    playerHpRef.current = nextHp;
+    setPlayerHp(nextHp);
+    registerWazaDamage(attackId, actualDamage, performance.now());
 
-      const winner = getBattleWinner(nextHp, getActivePlayerIds(maxPlayers));
+    if (!defending && hitX !== undefined && hitY !== undefined) {
+      spawnHitEffect(
+        hitX,
+        hitY,
+        hitColor ?? getPlayerColor(target),
+        actualDamage,
+        target,
+      );
+    }
 
-      if (winner) {
-        setBattleWinner(winner);
-      }
+    if (!defending) {
+      damageFlashUntilRef.current[target] =
+        performance.now() + DAMAGE_FLASH_TIME;
+    }
 
-      return nextHp;
-    });
+    const winner = getBattleWinner(
+      nextHp,
+      getRegisteredPlayerIds(trackedPlayerSlotsRef.current, maxPlayers),
+    );
+
+    if (winner) {
+      setBestWaza(getCurrentBestWaza());
+      setBattleWinner(winner);
+    }
   };
 
   const applyMissingFaceDamage = (
@@ -3211,6 +3351,7 @@ function App() {
         defender.center.x,
         defender.center.y,
         attack.color,
+        attack.attackId,
       );
     });
 
@@ -3332,6 +3473,7 @@ function App() {
         defender.center.x,
         defender.center.y,
         getPlayerColor(defender.id),
+        fireball.attackId ?? undefined,
       );
     });
 
@@ -3512,6 +3654,7 @@ function App() {
 
   const detect = () => {
     if (battleWinner) {
+      animationRef.current = null;
       return;
     }
 
@@ -3856,6 +3999,7 @@ function App() {
               defender.center.x,
               defender.center.y,
               getPlayerColor(defender.id),
+              attack.id,
             );
           }
         });
@@ -3906,6 +4050,7 @@ function App() {
               defender.center.x,
               defender.center.y,
               getPlayerColor(defender.id),
+              attack.id,
             );
           }
         }
@@ -4223,11 +4368,33 @@ function App() {
                   {getPlayerLabel(battleWinner)} WIN
                 </div>
                 <div className="battle-result-sub">HPが残っている方の勝ち</div>
+                {bestWaza && (
+                  <div className="best-waza">
+                    <div className="best-waza-label">Best WAZA</div>
+                    {bestWaza.photo && (
+                      <img
+                        src={bestWaza.photo}
+                        alt={`${getPlayerLabel(bestWaza.owner)} ${WAZA_LABELS[bestWaza.type]}`}
+                      />
+                    )}
+                    <div className="best-waza-name">
+                      {getPlayerLabel(bestWaza.owner)} /{" "}
+                      {WAZA_LABELS[bestWaza.type]}
+                    </div>
+                    <div className="best-waza-damage">
+                      {bestWaza.damage} DAMAGE
+                    </div>
+                    <div className="best-waza-id">
+                      WAZA ID {bestWaza.key} / LAST #{bestWaza.attackId}
+                    </div>
+                  </div>
+                )}
                 <button
                   type="button"
                   className="rematch-button"
                   onClick={() => {
                     resetBattleState();
+                    restartBattleLoop();
                     setStatus("再戦開始");
                   }}
                 >
